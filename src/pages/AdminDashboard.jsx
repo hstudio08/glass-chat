@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db, googleProvider } from '../services/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { collection, doc, setDoc, query, orderBy, onSnapshot, serverTimestamp, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, doc, setDoc, addDoc, query, orderBy, onSnapshot, serverTimestamp, updateDoc, deleteDoc } from 'firebase/firestore';
 import { Send, LogOut, Plus, Trash2, Ban, CheckCircle, Clock, ShieldHalf, Activity } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -25,7 +25,7 @@ export default function AdminDashboard() {
   const previousMessageCount = useRef(0);
   const isWindowFocused = useRef(true);
 
-  // --- Firebase Logic (Kept exactly the same as your working version) ---
+  // 1. Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user && user.email === ADMIN_EMAIL) setAdminUser(user);
@@ -35,6 +35,7 @@ export default function AdminDashboard() {
     return () => unsubscribe();
   }, []);
 
+  // 2. Tab Focus Listener (For Audio/Visual Alerts)
   useEffect(() => {
     const handleFocus = () => { isWindowFocused.current = true; document.title = "Admin HQ | GlassChat"; };
     const handleBlur = () => isWindowFocused.current = false;
@@ -43,25 +44,27 @@ export default function AdminDashboard() {
     return () => { window.removeEventListener('focus', handleFocus); window.removeEventListener('blur', handleBlur); };
   }, []);
 
+  // 3. Fetch Access Codes
   useEffect(() => {
     if (!adminUser) return;
     const q = query(collection(db, 'access_codes'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setAccessCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
-    });
+    }, (error) => console.error("Access Codes Error:", error));
     return () => unsubscribe();
   }, [adminUser]);
 
-  // 4. Active Chat & Typing Listener
+  // 4. Active Chat & Typing Listener (CRASH-PROOFED)
   useEffect(() => {
     if (!activeChatId) return;
     
-    // Listen for messages WITH error catching
+    // Fetch Messages
     const q = query(collection(db, 'chats', activeChatId, 'messages'), orderBy('timestamp', 'asc'));
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       const fetchedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setMessages(fetchedMessages);
       
+      // Play sound if new message from user
       if (previousMessageCount.current !== 0 && fetchedMessages.length > previousMessageCount.current) {
         const lastMessage = fetchedMessages[fetchedMessages.length - 1];
         if (lastMessage && lastMessage.sender === 'user') {
@@ -71,29 +74,28 @@ export default function AdminDashboard() {
       }
       previousMessageCount.current = fetchedMessages.length;
       setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
-    }, (error) => {
-      console.error("Message Listener Error:", error);
-    });
+    }, (error) => console.error("Messages Error:", error));
 
-    // Listen for user typing status WITH error catching
+    // Listen for User Typing
     const unsubscribeTyping = onSnapshot(doc(db, 'chats', activeChatId), (docSnap) => {
       if (docSnap.exists()) setIsUserTyping(docSnap.data().userTyping || false);
-    }, (error) => {
-      console.error("Typing Listener Error:", error);
-    });
+    }, (error) => console.error("Typing Error:", error));
 
-    return () => {
-      unsubscribeMessages();
-      unsubscribeTyping();
-      previousMessageCount.current = 0;
+    return () => { 
+      unsubscribeMessages(); 
+      unsubscribeTyping(); 
+      previousMessageCount.current = 0; 
     };
   }, [activeChatId]);
+
+  // --- Handlers ---
 
   const handleCreateCode = async (e) => {
     e.preventDefault();
     if (!newCodeId.trim()) return;
     let expiresAt = null;
     if (parseInt(expiryHours) > 0) expiresAt = Date.now() + (parseInt(expiryHours) * 60 * 60 * 1000);
+    
     await setDoc(doc(db, 'access_codes', newCodeId), { type: expiresAt ? "temporary" : "permanent", status: "active", createdAt: Date.now(), expiresAt: expiresAt });
     await setDoc(doc(db, 'chats', newCodeId), { userTyping: false, adminTyping: false }, { merge: true });
     setNewCodeId("");
@@ -122,6 +124,7 @@ export default function AdminDashboard() {
     if (activeChatId === id && newStatus === "blocked") setActiveChatId(null);
   };
 
+  // The newly fixed, crash-proof Message Sender
   const handleSendMessage = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !activeChatId) return;
@@ -130,23 +133,22 @@ export default function AdminDashboard() {
     setNewMessage("");
     
     try {
-      // Fire and forget typing status
+      // Background typing stop
       setDoc(doc(db, 'chats', activeChatId), { adminTyping: false }, { merge: true }).catch(() => {});
       
-      // Send the message
+      // Send actual message
       await addDoc(collection(db, 'chats', activeChatId, 'messages'), { 
-        text, 
+        text: text, 
         sender: "admin", 
         timestamp: serverTimestamp() 
       });
     } catch (error) {
-      console.error("Message Error:", error);
+      console.error("Message Sending Error:", error);
     }
   };
 
   const handleTyping = (e) => {
     setNewMessage(e.target.value);
-    
     if (activeChatId) {
       setDoc(doc(db, 'chats', activeChatId), { adminTyping: e.target.value.length > 0 }, { merge: true }).catch(() => {});
     }
@@ -158,7 +160,6 @@ export default function AdminDashboard() {
   if (!adminUser) {
     return (
       <div className="flex h-screen w-full items-center justify-center p-4 bg-[#0f172a] relative overflow-hidden">
-        {/* Dark Mode Background Effects */}
         <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-600/20 rounded-full mix-blend-screen filter blur-[100px] animate-pulse"></div>
         <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-600/20 rounded-full mix-blend-screen filter blur-[100px] animate-pulse delay-1000"></div>
         
@@ -176,7 +177,6 @@ export default function AdminDashboard() {
 
   return (
     <div className="flex h-screen w-full p-4 gap-4 bg-[#0f172a] font-sans selection:bg-blue-500/30 text-white overflow-hidden relative">
-      {/* Background Ambient Glow */}
       <div className="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none z-0">
         <div className="absolute -top-[20%] -left-[10%] w-[50%] h-[50%] bg-blue-600/10 rounded-full filter blur-[120px]"></div>
         <div className="absolute bottom-[0%] -right-[10%] w-[40%] h-[50%] bg-indigo-600/10 rounded-full filter blur-[120px]"></div>
@@ -205,7 +205,7 @@ export default function AdminDashboard() {
                 <option value="12">⏱ 12 Hours</option>
                 <option value="24">⏱ 24 Hours</option>
               </select>
-              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} type="submit" disabled={!newCodeId.trim()} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 text-white px-5 rounded-xl font-bold flex items-center shadow-lg shadow-blue-500/20 transition-all"><Plus size={20}/></motion.button>
+              <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} type="submit" disabled={!newCodeId.trim()} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-5 rounded-xl font-bold flex items-center shadow-lg transition-all"><Plus size={20}/></motion.button>
             </div>
           </form>
         </div>
