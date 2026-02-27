@@ -1,0 +1,22 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // Admin has access to everything
+    match /{document=**} {
+      allow read, write: if request.auth.uid == "YOUR_ADMIN_UID"; 
+    }
+
+    // Users can only read their specific access code status
+    match /access_codes/{codeId} {
+      allow read: if true; // Allows the login screen to verify the code
+      allow write: if false; // Only admin creates/deletes codes
+    }
+
+    // Users can only read and write to the chat linked to their access code
+    match /chats/{codeId}/messages/{messageId} {
+      // Allow if the code is active
+      allow read, write: if get(/databases/$(database)/documents/access_codes/$(codeId)).data.status == "active";
+    }
+  }
+}
