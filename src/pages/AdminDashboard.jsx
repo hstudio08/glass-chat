@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { auth, db, googleProvider } from '../services/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
-import { collection, doc, setDoc, query, orderBy, onSnapshot, serverTimestamp, updateDoc, deleteDoc, getDocs } from 'firebase/firestore';
+import { collection, doc, setDoc, query, orderBy, onSnapshot, serverTimestamp, updateDoc, deleteDoc } from 'firebase/firestore';
 import { Send, LogOut, Plus, Trash2, Ban, CheckCircle, Clock } from 'lucide-react';
 
 const ADMIN_EMAIL = "hstudio.webdev@gmail.com";
@@ -15,14 +15,18 @@ export default function AdminDashboard() {
   const [activeChatId, setActiveChatId] = useState(null);
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
+  const [isUserTyping, setIsUserTyping] = useState(false);
   
   // New Code Form State
   const [newCodeId, setNewCodeId] = useState("");
-  const [expiryHours, setExpiryHours] = useState("0"); // 0 means permanent
+  const [expiryHours, setExpiryHours] = useState("0"); 
   
   const messagesEndRef = useRef(null);
+  const audioRef = useRef(typeof Audio !== "undefined" ? new Audio('/pop.mp3') : null);
+  const previousMessageCount = useRef(0);
+  const isWindowFocused = useRef(true);
 
-  // Auth Listener
+  // 1. Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user && user.email === ADMIN_EMAIL) setAdminUser(user);
@@ -32,39 +36,75 @@ export default function AdminDashboard() {
     return () => unsubscribe();
   }, []);
 
-  // Fetch Access Codes & Auto-Cleanup check
+  // 2. Tab Focus Listener (for notifications)
+  useEffect(() => {
+    const handleFocus = () => {
+      isWindowFocused.current = true;
+      document.title = "Admin HQ | GlassChat";
+    };
+    const handleBlur = () => isWindowFocused.current = false;
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, []);
+
+  // 3. Fetch Access Codes & Auto-Cleanup
   useEffect(() => {
     if (!adminUser) return;
     const q = query(collection(db, 'access_codes'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
-      const codes = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setAccessCodes(codes);
+      setAccessCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
     });
     return () => unsubscribe();
   }, [adminUser]);
 
-  // Active Chat Listener
+  // 4. Active Chat & Typing Listener
   useEffect(() => {
     if (!activeChatId) return;
+    
+    // Listen for messages
     const q = query(collection(db, 'chats', activeChatId, 'messages'), orderBy('timestamp', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      setMessages(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    const unsubscribeMessages = onSnapshot(q, (snapshot) => {
+      const fetchedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+      setMessages(fetchedMessages);
+      
+      // Notification Logic
+      if (previousMessageCount.current !== 0 && fetchedMessages.length > previousMessageCount.current) {
+        const lastMessage = fetchedMessages[fetchedMessages.length - 1];
+        if (lastMessage && lastMessage.sender === 'user') {
+          audioRef.current?.play().catch(() => console.log("Audio blocked by browser"));
+          if (!isWindowFocused.current) document.title = "💬 New Message!";
+        }
+      }
+      
+      previousMessageCount.current = fetchedMessages.length;
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     });
-    return () => unsubscribe();
+
+    // Listen for user typing status
+    const unsubscribeTyping = onSnapshot(doc(db, 'chats', activeChatId), (docSnap) => {
+      if (docSnap.exists()) setIsUserTyping(docSnap.data().userTyping || false);
+    });
+
+    return () => {
+      unsubscribeMessages();
+      unsubscribeTyping();
+      previousMessageCount.current = 0;
+    };
   }, [activeChatId]);
 
-  // --- Admin Powers: Expiry & Cleanup ---
+  // --- Handlers ---
 
   const handleCreateCode = async (e) => {
     e.preventDefault();
     if (!newCodeId.trim()) return;
 
-    // Calculate exact expiry timestamp if not permanent
     let expiresAt = null;
-    if (parseInt(expiryHours) > 0) {
-      expiresAt = Date.now() + (parseInt(expiryHours) * 60 * 60 * 1000);
-    }
+    if (parseInt(expiryHours) > 0) expiresAt = Date.now() + (parseInt(expiryHours) * 60 * 60 * 1000);
 
     await setDoc(doc(db, 'access_codes', newCodeId), {
       type: expiresAt ? "temporary" : "permanent",
@@ -72,14 +112,15 @@ export default function AdminDashboard() {
       createdAt: Date.now(),
       expiresAt: expiresAt
     });
+    
+    // Initialize the chat document to hold typing status
+    await setDoc(doc(db, 'chats', newCodeId), { userTyping: false, adminTyping: false }, { merge: true });
     setNewCodeId("");
   };
 
-  // The Dashboard actively cleans up expired IDs when you click this button
   const cleanupExpiredIDs = async () => {
     const now = Date.now();
     let deletedCount = 0;
-    
     for (const code of accessCodes) {
       if (code.expiresAt && code.expiresAt < now) {
         await deleteDoc(doc(db, 'access_codes', code.id));
@@ -108,6 +149,9 @@ export default function AdminDashboard() {
     if (!newMessage.trim() || !activeChatId) return;
     const text = newMessage;
     setNewMessage("");
+    
+    // Stop typing indicator and send message
+    await updateDoc(doc(db, 'chats', activeChatId), { adminTyping: false });
     await setDoc(doc(collection(db, 'chats', activeChatId, 'messages')), {
       text,
       sender: "admin",
@@ -115,12 +159,20 @@ export default function AdminDashboard() {
     });
   };
 
+  const handleTyping = async (e) => {
+    setNewMessage(e.target.value);
+    if (activeChatId) {
+      await updateDoc(doc(db, 'chats', activeChatId), { adminTyping: e.target.value.length > 0 });
+    }
+  };
+
+  // --- Render ---
   if (authLoading) return <div className="flex h-screen items-center justify-center text-white bg-gray-900">Loading Base...</div>;
 
   if (!adminUser) {
     return (
       <div className="flex h-screen w-full items-center justify-center p-4 bg-gray-900">
-        <button onClick={() => signInWithPopup(auth, googleProvider)} className="bg-blue-600 px-6 py-3 rounded-xl text-white font-bold">
+        <button onClick={() => signInWithPopup(auth, googleProvider)} className="bg-blue-600 hover:bg-blue-700 px-8 py-4 rounded-xl text-white font-bold shadow-lg transition-all">
           Admin Login
         </button>
       </div>
@@ -129,8 +181,7 @@ export default function AdminDashboard() {
 
   return (
     <div className="flex h-screen w-full p-4 gap-4 bg-gray-900 font-sans">
-      
-      {/* Sidebar: Chat Management */}
+      {/* Sidebar */}
       <div className="w-1/3 glass-panel flex flex-col bg-white/5 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl">
         <div className="p-4 border-b border-white/10 flex justify-between items-center bg-white/5">
           <h2 className="text-white font-bold text-lg">Admin HQ</h2>
@@ -140,19 +191,11 @@ export default function AdminDashboard() {
           </div>
         </div>
 
-        {/* Generate Code Form */}
         <div className="p-4 border-b border-white/10 bg-black/20">
           <form onSubmit={handleCreateCode} className="flex flex-col gap-3">
-            <input 
-              type="text" value={newCodeId} onChange={(e) => setNewCodeId(e.target.value)}
-              placeholder="Assign Custom ID..." 
-              className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500"
-            />
+            <input type="text" value={newCodeId} onChange={(e) => setNewCodeId(e.target.value)} placeholder="Assign Custom ID..." className="bg-white/10 border border-white/20 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-blue-500"/>
             <div className="flex gap-2">
-              <select 
-                value={expiryHours} onChange={(e) => setExpiryHours(e.target.value)}
-                className="bg-gray-800 border border-white/20 rounded-lg px-3 py-2 text-white text-sm flex-1 outline-none"
-              >
+              <select value={expiryHours} onChange={(e) => setExpiryHours(e.target.value)} className="bg-gray-800 border border-white/20 rounded-lg px-3 py-2 text-white text-sm flex-1 outline-none">
                 <option value="0">Permanent</option>
                 <option value="1">Expire in 1 Hour</option>
                 <option value="12">Expire in 12 Hours</option>
@@ -163,7 +206,6 @@ export default function AdminDashboard() {
           </form>
         </div>
 
-        {/* Active Codes List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-3">
           {accessCodes.map(code => {
             const isExpired = code.expiresAt && code.expiresAt < Date.now();
@@ -175,7 +217,6 @@ export default function AdminDashboard() {
                     {isExpired ? 'EXPIRED' : code.type.toUpperCase()}
                   </span>
                 </div>
-                
                 <div className="flex gap-2">
                   <button onClick={(e) => { e.stopPropagation(); toggleBlockStatus(code.id, code.status); }} className={`flex-1 py-1.5 rounded-lg flex justify-center items-center text-xs font-bold text-white transition-colors ${code.status === 'active' ? 'bg-orange-500/40 hover:bg-orange-500/60' : 'bg-green-500/40 hover:bg-green-500/60'}`}>
                     {code.status === 'active' ? <Ban size={14} className="mr-1"/> : <CheckCircle size={14} className="mr-1"/>}
@@ -191,7 +232,7 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* Main Chat Area */}
+      {/* Main Chat */}
       <div className="flex-1 glass-panel flex flex-col bg-white/5 border border-white/10 rounded-2xl overflow-hidden backdrop-blur-xl relative">
         {activeChatId ? (
           <>
@@ -208,13 +249,24 @@ export default function AdminDashboard() {
                   </div>
                 </div>
               ))}
+              
+              {/* Typing Indicator */}
+              {isUserTyping && (
+                <div className="flex justify-start">
+                  <div className="px-5 py-3 bg-white/5 text-gray-400 rounded-2xl rounded-tl-sm backdrop-blur-md border border-white/10 flex gap-1 items-center shadow-lg">
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                    <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                  </div>
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
 
             <div className="p-4 border-t border-white/10 bg-black/20 z-10">
               <form onSubmit={handleSendMessage} className="flex gap-3 max-w-4xl mx-auto">
                 <input 
-                  type="text" value={newMessage} onChange={(e) => setNewMessage(e.target.value)}
+                  type="text" value={newMessage} onChange={handleTyping}
                   placeholder="Message user..." 
                   className="flex-1 bg-white/5 border border-white/20 rounded-full px-6 py-3 focus:outline-none focus:border-blue-500 transition-all text-white placeholder-gray-500 shadow-inner"
                 />
@@ -232,7 +284,6 @@ export default function AdminDashboard() {
           </div>
         )}
       </div>
-
     </div>
   );
 }

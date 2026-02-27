@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, updateDoc } from 'firebase/firestore';
 import { Send, LogOut } from 'lucide-react';
 import { db } from '../services/firebase';
 import Login from './Login';
@@ -8,8 +8,11 @@ export default function UserChat() {
   const [chatId, setChatId] = useState(null); 
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
+  const [isAdminTyping, setIsAdminTyping] = useState(false);
+  
   const messagesEndRef = useRef(null);
 
+  // 1. Fetch Messages Listener
   useEffect(() => {
     if (!chatId) return;
 
@@ -26,6 +29,22 @@ export default function UserChat() {
     return () => unsubscribe();
   }, [chatId]);
 
+  // 2. Typing Status Listener
+  useEffect(() => {
+    if (!chatId) return;
+
+    // Listen to the main chat document for admin typing status
+    const unsubscribeTyping = onSnapshot(doc(db, 'chats', chatId), (docSnap) => {
+      if (docSnap.exists()) {
+        setIsAdminTyping(docSnap.data().adminTyping || false);
+      }
+    });
+
+    return () => unsubscribeTyping();
+  }, [chatId]);
+
+  // --- Handlers ---
+
   const handleSend = async (e) => {
     e.preventDefault();
     if (!newMessage.trim() || !chatId) return;
@@ -34,6 +53,9 @@ export default function UserChat() {
     setNewMessage(""); 
 
     try {
+      // Tell database the user stopped typing, then send the message
+      await updateDoc(doc(db, 'chats', chatId), { userTyping: false });
+      
       await addDoc(collection(db, 'chats', chatId, 'messages'), {
         text: text,
         sender: "user", 
@@ -41,6 +63,14 @@ export default function UserChat() {
       });
     } catch (error) {
       console.error("Error sending message:", error);
+    }
+  };
+
+  const handleTyping = async (e) => {
+    setNewMessage(e.target.value);
+    if (chatId) {
+      // Update Firestore with true if there is text, false if empty
+      await updateDoc(doc(db, 'chats', chatId), { userTyping: e.target.value.length > 0 });
     }
   };
 
@@ -86,6 +116,17 @@ export default function UserChat() {
               </div>
             ))
           )}
+          
+          {/* Admin Typing Indicator */}
+          {isAdminTyping && (
+            <div className="flex justify-start">
+              <div className="glass-panel bg-white/60 border-white/40 px-5 py-3 rounded-bl-none shadow-sm flex gap-1 items-center">
+                <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce"></div>
+                <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                <div className="w-2 h-2 bg-gray-500 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+              </div>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
 
@@ -95,7 +136,7 @@ export default function UserChat() {
             <input 
               type="text" 
               value={newMessage}
-              onChange={(e) => setNewMessage(e.target.value)}
+              onChange={handleTyping}
               placeholder="Type a message..." 
               className="flex-1 bg-white/50 border border-glassBorder rounded-full px-6 py-3 focus:outline-none focus:ring-2 focus:ring-blue-400/50 backdrop-blur-md transition-all text-gray-800 placeholder-gray-500 shadow-inner"
             />
