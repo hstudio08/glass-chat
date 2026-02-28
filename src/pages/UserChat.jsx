@@ -4,7 +4,7 @@ import { Send, LogOut, ShieldCheck, Lock, WifiOff, ChevronDown, CheckCheck, Chec
 import { db } from '../services/firebase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { JitsiMeeting } from '@jitsi/react-sdk'; // 🆕 IN-APP VIDEO SDK
+import { JitsiMeeting } from '@jitsi/react-sdk'; 
 import Login from './Login';
 
 // ==========================================
@@ -44,9 +44,10 @@ export default function UserChat() {
   const [userProfile, setUserProfile] = useState({ name: "", bio: "", avatar: "" });
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   
-  // 🆕 IN-APP VIDEO STATE
+  // 🎥 NATIVE VIDEO STATE
   const [activeVideoRoom, setActiveVideoRoom] = useState(null);
 
+  // ✅ CRITICAL FIX: Restored Refs
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const textareaRef = useRef(null);
@@ -160,12 +161,12 @@ export default function UserChat() {
 
   const handleImageSelect = (e) => { const file = e.target.files[0]; if (!file) return; setPendingImage(file); setPreviewUrl(URL.createObjectURL(file)); e.target.value = null; };
 
-  // 🆕 IN-APP VIDEO CALL ENGINE
+  // 🎥 IN-APP VIDEO CALL 
   const handleStartVideoCall = async () => {
     if (!chatId) return;
-    const roomName = `GlassChat-Vault-${chatId}-${Math.random().toString(36).substring(2, 9)}`;
+    const roomName = `GlassChat-${chatId}-${Math.random().toString(36).substring(2, 9)}`;
     await addDoc(collection(db, 'chats', chatId, 'messages'), { text: "Started a Secure Video Call", isVideoCall: true, roomName: roomName, sender: "user", timestamp: serverTimestamp(), status: "sent" });
-    setActiveVideoRoom(roomName); // Auto join as user
+    setActiveVideoRoom(roomName);
     scrollToBottom('auto');
   };
 
@@ -212,7 +213,7 @@ export default function UserChat() {
         await addDoc(collection(db, 'chats', chatId, 'messages'), { text: currentText, isImage: false, sender: "user", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
       }
       scrollToBottom('auto');
-    } catch (err) { setConnectionError("Delivery Failed: Session is Blocked or Expired."); } finally { setIsUploading(false); }
+    } catch (err) { setConnectionError("Delivery Failed."); } finally { setIsUploading(false); }
   };
 
   const handleSaveProfile = async () => {
@@ -318,22 +319,39 @@ export default function UserChat() {
         )}
       </AnimatePresence>
 
-      {/* 📞 IN-APP VIDEO CALL OVERLAY */}
+      {/* 🚀 ULTIMATE WHITE-LABEL IN-APP VIDEO CALL OVERLAY */}
       <AnimatePresence>
         {activeVideoRoom && (
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} transition={animTween} className="fixed inset-0 z-[200] flex flex-col bg-[#111]">
-            <div className="h-16 flex items-center justify-between px-6 bg-[#1a1a1a] border-b border-white/10">
-              <span className="text-white font-bold flex items-center gap-2"><Video size={20} className="text-blue-500"/> Secure Meeting Room</span>
-              <button onClick={() => setActiveVideoRoom(null)} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors"><PhoneOff size={16}/> Leave Call</button>
+            <div className="h-16 flex items-center justify-between px-6 bg-[#1a1a1a] border-b border-white/10 shrink-0">
+              <span className="text-white font-bold flex items-center gap-2"><Video size={20} className="text-emerald-400"/> Secure Audio/Video Tunnel</span>
+              <button onClick={() => setActiveVideoRoom(null)} className="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-xl text-sm font-bold flex items-center gap-2 transition-colors"><PhoneOff size={16}/> Terminate Connection</button>
             </div>
             <div className="flex-1 w-full bg-black relative">
               <JitsiMeeting
-                domain="meet.jit.si"
+                domain="meet.ffmuc.net"
                 roomName={activeVideoRoom}
-                configOverwrite={{ startWithAudioMuted: true, disableDeepLinking: true }}
-                interfaceConfigOverwrite={{ DISABLE_JOIN_LEAVE_NOTIFICATIONS: true, SHOW_CHROME_EXTENSION_BANNER: false }}
+                configOverwrite={{
+                  startWithAudioMuted: true,
+                  disableDeepLinking: true,
+                  prejoinPageEnabled: false, 
+                  disableInviteFunctions: true,
+                  hideConferenceSubject: true,
+                  hideConferenceTimer: true,
+                }}
+                interfaceConfigOverwrite={{
+                  SHOW_JITSI_WATERMARK: false,
+                  SHOW_WATERMARK_FOR_GUESTS: false,
+                  SHOW_BRAND_WATERMARK: false,
+                  DEFAULT_LOGO_URL: '',
+                  SHOW_PROMOTIONAL_CLOSE_PAGE: false,
+                  DISABLE_JOIN_LEAVE_NOTIFICATIONS: true,
+                  SHOW_CHROME_EXTENSION_BANNER: false,
+                  HIDE_INVITE_MORE_HEADER: true,
+                  TOOLBAR_BUTTONS: [ 'microphone', 'camera', 'desktop', 'fullscreen', 'fodeviceselection', 'hangup', 'chat', 'settings', 'tileview' ]
+                }}
                 userInfo={{ displayName: userProfile.name || 'Client' }}
-                getIFrameRef={(iframeRef) => { iframeRef.style.height = '100%'; iframeRef.style.width = '100%'; }}
+                getIFrameRef={(iframeRef) => { iframeRef.style.height = '100%'; iframeRef.style.width = '100%'; iframeRef.style.border = 'none'; }}
               />
             </div>
           </motion.div>
@@ -347,7 +365,7 @@ export default function UserChat() {
             {isOffline && <div className="absolute inset-0 bg-[#F9F6F0]/90 z-[60] flex flex-col items-center justify-center backdrop-blur-md"><WifiOff size={48} className="text-[#8C7462] mb-4 animate-pulse" /><h2 className="text-xl font-bold text-[#3A2D23]">Connection Lost</h2></div>}
             {privacyMode && !isOffline && !selectedImage && <div className="absolute inset-0 bg-[#F9F6F0]/95 z-[55] flex flex-col items-center justify-center backdrop-blur-xl"><Lock size={48} className="text-[#8C7462] mb-4" /><h2 className="text-xl font-bold text-[#3A2D23]">Session Locked</h2></div>}
 
-            <header className="flex-none shrink-0 bg-[#F9F6F0]/70 backdrop-blur-xl border-b border-[#C1B2A6]/50 px-4 sm:px-8 py-3 flex items-center justify-between z-20 shadow-[0_10px_30px_rgba(90,70,50,0.03)]" style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}>
+            <header className="flex-none shrink-0 bg-white/60 backdrop-blur-xl border-b border-[#E8E1D5] px-4 sm:px-8 py-3 flex items-center justify-between z-20 shadow-[0_10px_30px_rgba(90,70,50,0.03)]" style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}>
               <div className="flex items-center gap-3">
                 <div className="relative flex items-center justify-center w-10 h-10 bg-gradient-to-br from-[#8C7462] to-[#5A4535] rounded-xl shadow-sm text-[#F9F6F0]">
                   <ShieldCheck size={20} />
@@ -382,17 +400,17 @@ export default function UserChat() {
                       <motion.div key={msg.id} layout="position" variants={fadeUp} initial="hidden" animate="visible" className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} group relative`}>
                         
                         {msg.replyToId && messages.find(m => m.id === msg.replyToId) && (
-                          <div className={`mb-1 px-3 py-1.5 rounded-lg text-xs font-medium border opacity-80 max-w-[70%] truncate ${isUser ? 'bg-[#E8E1D5] border-[#C1B2A6]/50 text-[#4A3C31]' : 'bg-[#C1B2A6]/30 border-[#C1B2A6]/50 text-[#4A3C31]'}`}>
+                          <div className={`mb-1 px-3 py-1.5 rounded-lg text-xs font-medium border opacity-80 max-w-[70%] truncate ${isUser ? 'bg-[#E8E1D5] border-[#C1B2A6]/50 text-[#4A3C31]' : 'bg-white border-[#E8E1D5] text-[#4A3C31]'}`}>
                             <Reply size={10} className="inline mr-1"/> {messages.find(m => m.id === msg.replyToId).text}
                           </div>
                         )}
 
-                        <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border ${isUser ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
+                        <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border ${isUser ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-white border-[#E8E1D5] text-[#4A3C31] rounded-tl-sm'}`}>
                           {msg.isVideoCall ? (
-                            <div className="flex flex-col items-center justify-center p-3 bg-[#F9F6F0]/10 rounded-xl border border-[#C1B2A6]/30 mb-1">
+                            <div className="flex flex-col items-center justify-center p-3 bg-black/10 rounded-xl border border-black/10 mb-1">
                               <Video size={28} className={`mb-2 ${isUser ? 'text-[#F9F6F0]' : 'text-[#5A4535]'}`} />
                               <p className="font-bold text-sm mb-3">Secure Video Call</p>
-                              <button onClick={() => setActiveVideoRoom(msg.roomName)} className={`px-5 py-2 rounded-full font-bold text-xs shadow-md transition-transform hover:scale-105 ${isUser ? 'bg-[#F9F6F0] text-[#5A4535]' : 'bg-[#5A4535] text-[#F9F6F0]'}`}>
+                              <button onClick={() => setActiveVideoRoom(msg.roomName)} className={`px-5 py-2 rounded-full font-bold text-xs shadow-md transition-transform hover:scale-105 ${isUser ? 'bg-[#F9F6F0] text-[#5A4535]' : 'bg-[#5A4535] text-white'}`}>
                                 JOIN IN-APP
                               </button>
                             </div>
@@ -412,7 +430,7 @@ export default function UserChat() {
                         </div>
 
                         <div className={`hidden sm:flex absolute top-1/2 -translate-y-1/2 ${isUser ? '-left-[44px]' : '-right-[44px]'} opacity-0 group-hover:opacity-100 transition-opacity gap-1.5`}>
-                          <button onClick={() => setReplyingToId(msg.id)} className="p-2 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 shadow-sm hover:text-[#5A4535] text-[#7A6B5D] transition-colors"><Reply size={14}/></button>
+                          <button onClick={() => setReplyingToId(msg.id)} className="p-2 rounded-xl bg-white border border-[#E8E1D5] shadow-sm hover:border-[#8C7462] text-[#7A6B5D] transition-colors"><Reply size={14}/></button>
                         </div>
                       </motion.div>
                     )
@@ -420,7 +438,7 @@ export default function UserChat() {
 
                   {isAdminTyping && (
                     <motion.div layout="position" variants={fadeUp} initial="hidden" animate="visible" exit="hidden" className="flex justify-start">
-                      <div className="px-4 py-3 rounded-2xl rounded-tl-sm border bg-[#F9F6F0] border-[#C1B2A6]/50 shadow-sm flex items-center gap-2">
+                      <div className="px-4 py-3 rounded-2xl rounded-tl-sm border bg-white border-[#E8E1D5] shadow-sm flex items-center gap-2">
                         <span className="text-[10px] font-bold uppercase tracking-widest text-[#9E8E81]">Support typing</span>
                         <div className="flex gap-1 ml-1"><div className="w-1.5 h-1.5 bg-[#8C7462] rounded-full animate-bounce"/><div className="w-1.5 h-1.5 bg-[#8C7462] rounded-full animate-bounce" style={{animationDelay:'0.15s'}}/><div className="w-1.5 h-1.5 bg-[#8C7462] rounded-full animate-bounce" style={{animationDelay:'0.3s'}}/></div>
                       </div>
@@ -433,13 +451,13 @@ export default function UserChat() {
 
             <AnimatePresence>
               {showScrollButton && (
-                <motion.button initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={animTween} onClick={() => scrollToBottom('smooth')} className="absolute bottom-32 right-6 p-3 bg-[#F9F6F0] text-[#5A4535] rounded-full shadow-md border border-[#C1B2A6]/50 z-30">
+                <motion.button initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={animTween} onClick={() => scrollToBottom('smooth')} className="absolute bottom-32 right-6 p-3 bg-white text-[#5A4535] rounded-full shadow-md border border-[#E8E1D5] z-30">
                   <ChevronDown size={20} strokeWidth={3} />
                 </motion.button>
               )}
             </AnimatePresence>
 
-            <footer className="flex-none shrink-0 bg-[#F9F6F0]/80 backdrop-blur-xl border-t border-[#C1B2A6]/50 px-3 sm:px-8 py-3 z-20 w-full flex flex-col items-center shadow-[0_-10px_30px_rgba(90,70,50,0.03)]" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+            <footer className="flex-none shrink-0 bg-white/70 backdrop-blur-xl border-t border-[#E8E1D5] px-3 sm:px-8 py-3 z-20 w-full flex flex-col items-center shadow-[0_-10px_30px_rgba(90,70,50,0.03)]" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
               <div className="w-full max-w-4xl flex flex-col gap-2 relative">
                 
                 <AnimatePresence>
@@ -447,7 +465,7 @@ export default function UserChat() {
                     <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center gap-2 bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-xl text-xs font-bold mb-1"><AlertCircle size={14} /> {connectionError}</motion.div>
                   )}
                   {replyingToId && (
-                    <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center justify-between bg-[#E8E1D5] border border-[#C1B2A6]/50 px-4 py-2 rounded-xl text-xs font-bold text-[#5A4535] shadow-sm mb-1">
+                    <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center justify-between bg-[#E8E1D5] border border-[#C1B2A6] px-4 py-2 rounded-xl text-xs font-bold text-[#5A4535] shadow-sm mb-1">
                       <span className="truncate flex-1 flex items-center gap-2"><Reply size={14}/> Replying: {messages.find(m => m.id === replyingToId)?.text?.substring(0,40)}...</span>
                       <button onClick={() => setReplyingToId(null)} className="ml-2 bg-[#C1B2A6]/50 p-1 rounded-full hover:bg-[#C1B2A6]"><X size={12}/></button>
                     </motion.div>
@@ -458,7 +476,7 @@ export default function UserChat() {
                         <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#E8E1D5] text-[#5A4535] border border-[#C1B2A6]/50 text-xs font-semibold"><Loader2 size={14} className="animate-spin" /> Analyzing context...</div>
                       ) : (
                         aiReplies.map((reply, i) => (
-                          <button key={i} onClick={() => handleSendText(null, reply)} className="text-[12px] whitespace-nowrap font-bold px-4 py-1.5 rounded-full bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:border-[#8C7462] hover:bg-[#E8E1D5] shadow-sm transition-colors min-h-[36px]">{reply}</button>
+                          <button key={i} onClick={() => handleSendText(null, reply)} className="text-[12px] whitespace-nowrap font-bold px-4 py-1.5 rounded-full bg-white border border-[#E8E1D5] text-[#5A4535] hover:border-[#8C7462] hover:bg-[#F9F6F0] shadow-sm transition-colors min-h-[36px]">{reply}</button>
                         ))
                       )}
                     </motion.div>
@@ -468,44 +486,43 @@ export default function UserChat() {
                 <form className="flex gap-2 items-end w-full">
                   <div className="flex gap-1 mb-1">
                     <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageSelect} className="hidden" />
-                    <button type="button" onClick={() => { ignoreBlurRef.current = true; fileInputRef.current?.click(); }} disabled={isUploading || isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-[#5A4535] shadow-sm disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
+                    <button type="button" onClick={() => { ignoreBlurRef.current = true; fileInputRef.current?.click(); }} disabled={isUploading || isOffline} className="p-2.5 sm:p-3 rounded-xl bg-white border border-[#E8E1D5] text-[#7A6B5D] hover:border-[#8C7462] hover:text-[#5A4535] shadow-sm disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
                       {isUploading ? <Loader2 size={20} className="animate-spin" /> : <ImageIcon size={20} />}
                     </button>
-                    <button type="button" onClick={generateAIQuickReplies} title="AI Replies" disabled={isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#E8E1D5] border border-[#C1B2A6]/50 text-[#8C7462] hover:bg-[#C1B2A6]/30 shadow-sm min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
+                    <button type="button" onClick={generateAIQuickReplies} title="AI Replies" disabled={isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#E8E1D5] border border-[#C1B2A6]/50 text-[#8C7462] hover:bg-[#C1B2A6]/50 shadow-sm min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
                       <Sparkles size={20} className={isGeneratingAI ? "animate-pulse" : ""} />
                     </button>
                   </div>
 
-                  <div className="flex-1 relative bg-[#F9F6F0] border border-[#C1B2A6]/50 rounded-2xl shadow-sm focus-within:border-[#8C7462] focus-within:ring-2 focus-within:ring-[#E8E1D5] transition-all flex flex-col p-1.5">
-                    
+                  <div className="flex-1 relative bg-white border border-[#E8E1D5] rounded-2xl shadow-sm focus-within:border-[#8C7462] focus-within:ring-2 focus-within:ring-[#E8E1D5] transition-all flex flex-col p-1.5">
                     {previewUrl && (
                       <div className="relative mb-2 ml-2 mt-2 inline-block w-max">
                         <img src={previewUrl} className="h-20 w-auto rounded-lg border border-[#C1B2A6]/50 object-cover shadow-sm" alt="Preview" />
-                        <button type="button" onClick={() => { setPendingImage(null); setPreviewUrl(null); }} className="absolute -top-2 -right-2 bg-[#3A2D23] text-[#F9F6F0] rounded-full p-1 hover:bg-red-500 shadow-md transition-colors z-10"><X size={12}/></button>
+                        <button type="button" onClick={() => { setPendingImage(null); setPreviewUrl(null); }} className="absolute -top-2 -right-2 bg-[#3A2D23] text-white rounded-full p-1 hover:bg-red-500 shadow-md transition-colors z-10"><X size={12}/></button>
                         <button type="button" onClick={() => setCompressImage(!compressImage)} className={`absolute bottom-2 left-2 text-[10px] font-bold px-2 py-1 rounded-md border z-10 transition-colors backdrop-blur-md shadow-sm ${compressImage ? 'bg-[#5A4535]/90 text-white border-[#4A3C31]' : 'bg-[#E8E1D5]/80 text-[#4A3C31] border-[#C1B2A6]'}`}>
                           {compressImage ? '⚡ Fast' : '💎 HQ'}
                         </button>
                       </div>
                     )}
 
+                    {editingMsgId && <button type="button" onClick={() => {setEditingMsgId(null); setNewMessage("");}} className="absolute top-2 left-2 p-1 bg-[#E8E1D5] text-[#5A4535] rounded hover:bg-[#C1B2A6] z-10"><X size={14}/></button>}
+                    
                     <div className="flex items-end w-full">
                       <textarea 
                         ref={textareaRef} value={newMessage} 
-                        onChange={(e) => { setNewMessage(e.target.value); e.target.style.height = '48px'; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`; }} 
+                        onChange={(e) => { setNewMessage(e.target.value); e.target.style.height = '48px'; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`; }}
                         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(e); } }}
-                        onFocus={handleInputFocus} onBlur={handleInputBlur} placeholder={previewUrl ? "Add a caption (optional)..." : "Message..."} disabled={isOffline || isUploading} rows={1}
-                        className={`flex-1 bg-transparent py-2.5 text-[16px] text-[#4A3C31] placeholder-[#9E8E81] focus:outline-none resize-none custom-scrollbar leading-relaxed pl-3 pr-12`}
+                        onChangeCapture={handleTyping} placeholder={previewUrl ? "Caption (optional)..." : (editingMsgId ? "Edit message..." : "Message...")} rows={1} disabled={isOffline || isUploading}
+                        className={`flex-1 bg-transparent py-2.5 text-[16px] text-[#4A3C31] placeholder-[#9E8E81] focus:outline-none resize-none custom-scrollbar leading-relaxed ${editingMsgId ? 'pl-8' : 'pl-3'} pr-12`}
                         style={{ minHeight: '48px' }}
                       />
-                      
                       <div className="absolute right-1.5 bottom-1.5">
-                        <motion.button onClick={handleSendText} type="button" whileTap={{ scale: 0.95 }} disabled={(!newMessage.trim() && !pendingImage) || isOffline || isUploading} className="p-2 rounded-xl bg-[#5A4535] text-[#F9F6F0] shadow-sm disabled:opacity-50 transition-opacity min-h-[36px] min-w-[36px] flex items-center justify-center">
-                          {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} className="ml-0.5" />}
+                        <motion.button onClick={handleSendText} type="button" whileTap={{ scale: 0.95 }} disabled={(!newMessage.trim() && !pendingImage) || isOffline || isUploading} className={`p-2 rounded-xl text-white shadow-sm disabled:opacity-50 transition-opacity min-h-[36px] min-w-[36px] flex items-center justify-center ${editingMsgId ? 'bg-[#8C7462]' : 'bg-[#5A4535]'}`}>
+                          {isUploading ? <Loader2 size={18} className="animate-spin" /> : (editingMsgId ? <span className="text-xs font-bold px-1">Save</span> : <Send size={18} className="ml-0.5" />)}
                         </motion.button>
                       </div>
                     </div>
                   </div>
-
                 </form>
               </div>
             </footer>
