@@ -2,28 +2,41 @@ import { useState, useEffect, useRef } from 'react';
 import { auth, db, googleProvider } from '../services/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, addDoc, query, orderBy, onSnapshot, serverTimestamp, updateDoc, deleteDoc } from 'firebase/firestore';
-import { Send, LogOut, Plus, Trash2, Ban, CheckCircle, Clock, ShieldHalf, Activity, MessageSquare, KeyRound, Settings, Ghost, Edit2, X, Eraser, Sun, Moon, Download, Zap } from 'lucide-react';
+import { Send, LogOut, Plus, Trash2, Ban, CheckCircle, Clock, ShieldHalf, Activity, MessageSquare, KeyRound, Settings, Ghost, Edit2, X, Eraser, Sun, Moon, Download, ChevronLeft, Copy, Image as ImageIcon, Loader2, Maximize, ChevronDown, Sparkles, Edit3, Check, CheckCheck, EyeOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 const ADMIN_EMAIL = "hstudio.webdev@gmail.com";
 
-// Pre-defined quick replies for fast customer support
-const QUICK_REPLIES = [
-  "👋 Hello! How can I help you today?",
-  "🔒 This is a secure, end-to-end encrypted channel.",
-  "⏳ Please give me one moment to look into that for you.",
-  "✅ Your request has been successfully processed."
-];
+// ==========================================
+// 🚀 API CONFIGURATION
+const IMGBB_API_KEY = '250588b8b03b100c08b3df82baaa28a4'; // Free image hosting for attachments
+const GEMINI_API_KEY = 'AIzaSyCzWUVmeJ1NE_8D_JmQQrFQv4elA1zS2iA';
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+// ==========================================
+
+const animTween = { type: "tween", ease: "easeOut", duration: 0.25 };
+const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: animTween } };
 
 export default function AdminDashboard() {
-  // Core Auth
   const [adminUser, setAdminUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   
-  // UI & Theme State
   const [activeTab, setActiveTab] = useState('chats'); 
-  const [isDarkMode, setIsDarkMode] = useState(true);
-  const [showQuickReplies, setShowQuickReplies] = useState(false);
+  const [showMobileChat, setShowMobileChat] = useState(false);
+  const [showScrollButton, setShowScrollButton] = useState(false);
+  
+  // AI & Image State
+  const [isGeneratingAI, setIsGeneratingAI] = useState(false);
+  const [aiReplies, setAiReplies] = useState([]);
+  const [showAIReplies, setShowAIReplies] = useState(false);
+  
+  const [isUploading, setIsUploading] = useState(false);
+  const [pendingImage, setPendingImage] = useState(null);
+  const [previewUrl, setPreviewUrl] = useState(null);
+  const [compressImage, setCompressImage] = useState(true);
+  const [selectedImage, setSelectedImage] = useState(null);
+  const ignoreBlurRef = useRef(false);
   
   // Database & Feature State
   const [accessCodes, setAccessCodes] = useState([]);
@@ -32,23 +45,22 @@ export default function AdminDashboard() {
   const [newMessage, setNewMessage] = useState("");
   const [activeChatDoc, setActiveChatDoc] = useState(null); 
   const [ghostMode, setGhostMode] = useState(false);
+  const [hideReceipts, setHideReceipts] = useState(false); 
   const [editingMsgId, setEditingMsgId] = useState(null);
   
   const [newCodeId, setNewCodeId] = useState("");
+  const [newCodeName, setNewCodeName] = useState("");
   const [expiryHours, setExpiryHours] = useState("0"); 
   
   const messagesEndRef = useRef(null);
+  const chatContainerRef = useRef(null);
+  const textareaRef = useRef(null);
+  const fileInputRef = useRef(null);
   const audioRef = useRef(typeof Audio !== "undefined" ? new Audio('/pop.mp3') : null);
   const previousMessageCount = useRef(0);
   const isWindowFocused = useRef(true);
 
-  // --- Theme Variables ---
-  const themeBg = isDarkMode ? "bg-[#0a0f1a]" : "bg-slate-100";
-  const themeText = isDarkMode ? "text-white" : "text-slate-800";
-  const panelBg = isDarkMode ? "bg-white/5 border-white/10 backdrop-blur-2xl" : "bg-white border-slate-200 shadow-xl";
-  const inputBg = isDarkMode ? "bg-white/5 border-white/10 text-white placeholder-gray-500" : "bg-slate-50 border-slate-300 text-slate-900 placeholder-slate-400 focus:bg-white";
-
-  // --- Listeners ---
+  // --- Auth & Focus Listeners ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user && user.email === ADMIN_EMAIL) setAdminUser(user);
@@ -61,10 +73,15 @@ export default function AdminDashboard() {
   useEffect(() => {
     const handleFocus = () => { isWindowFocused.current = true; document.title = "Admin HQ | GlassChat"; };
     const handleBlur = () => isWindowFocused.current = false;
+    const handleKeyDown = (e) => { if (e.key === 'Escape' && selectedImage) setSelectedImage(null); };
+
     window.addEventListener('focus', handleFocus);
     window.addEventListener('blur', handleBlur);
-    return () => { window.removeEventListener('focus', handleFocus); window.removeEventListener('blur', handleBlur); };
-  }, []);
+    window.addEventListener('keyup', handleKeyDown);
+    return () => { 
+      window.removeEventListener('focus', handleFocus); window.removeEventListener('blur', handleBlur); window.removeEventListener('keyup', handleKeyDown);
+    };
+  }, [selectedImage]);
 
   useEffect(() => {
     if (!adminUser) return;
@@ -75,21 +92,25 @@ export default function AdminDashboard() {
     return () => unsubscribe();
   }, [adminUser]);
 
+  // Handle changing active chat
   useEffect(() => {
+    setShowAIReplies(false); setAiReplies([]); setPendingImage(null); setPreviewUrl(null);
     if (!activeChatId) return;
+    
     const q = query(collection(db, 'chats', activeChatId, 'messages'), orderBy('timestamp', 'asc'));
     const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       const fetchedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setMessages(fetchedMessages);
       if (previousMessageCount.current !== 0 && fetchedMessages.length > previousMessageCount.current) {
-        const lastMessage = fetchedMessages[fetchedMessages.length - 1];
-        if (lastMessage && lastMessage.sender === 'user') {
+        const lastMsg = fetchedMessages[fetchedMessages.length - 1];
+        if (lastMsg?.sender === 'user') {
           audioRef.current?.play().catch(() => {});
           if (!isWindowFocused.current) document.title = "💬 New Message!";
+          setShowAIReplies(false); 
         }
       }
       previousMessageCount.current = fetchedMessages.length;
-      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+      setTimeout(() => scrollToBottom('auto'), 100);
     });
 
     const unsubscribeDoc = onSnapshot(doc(db, 'chats', activeChatId), (docSnap) => {
@@ -99,11 +120,12 @@ export default function AdminDashboard() {
     return () => { unsubscribeMessages(); unsubscribeDoc(); previousMessageCount.current = 0; };
   }, [activeChatId]);
 
+  // 🕵️ ADMIN PRESENCE ENGINE
   useEffect(() => {
     if (!activeChatId) return;
     const setOnlineStatus = async () => {
-      if (ghostMode) await setDoc(doc(db, 'chats', activeChatId), { adminOnline: false, adminTyping: false }, { merge: true }).catch(()=>{});
-      else await setDoc(doc(db, 'chats', activeChatId), { adminOnline: true }, { merge: true }).catch(()=>{});
+      if (ghostMode) setDoc(doc(db, 'chats', activeChatId), { adminOnline: false, adminTyping: false }, { merge: true }).catch(()=>{});
+      else setDoc(doc(db, 'chats', activeChatId), { adminOnline: true }, { merge: true }).catch(()=>{});
     };
     setOnlineStatus();
     return () => {
@@ -111,23 +133,96 @@ export default function AdminDashboard() {
     };
   }, [activeChatId, ghostMode]);
 
-  // --- ID Handlers ---
+  // 📡 READ RECEIPTS ENGINE 
+  useEffect(() => {
+    if (!activeChatId || hideReceipts) return;
+    const hasFocus = document.hasFocus();
+    messages.forEach(msg => {
+      if (msg.sender === 'user') {
+        if (hasFocus && msg.status !== 'seen') {
+          updateDoc(doc(db, 'chats', activeChatId, 'messages', msg.id), { status: 'seen' }).catch(()=>{});
+        } else if (!hasFocus && msg.status === 'sent') {
+          updateDoc(doc(db, 'chats', activeChatId, 'messages', msg.id), { status: 'delivered' }).catch(()=>{});
+        }
+      }
+    });
+  }, [messages, activeChatId, hideReceipts]);
+
+  useEffect(() => {
+    const handleFocus = () => {
+      if (!activeChatId || hideReceipts) return;
+      messages.forEach(msg => {
+        if (msg.sender === 'user' && msg.status !== 'seen') updateDoc(doc(db, 'chats', activeChatId, 'messages', msg.id), { status: 'seen' }).catch(()=>{});
+      });
+    };
+    window.addEventListener('focus', handleFocus);
+    return () => window.removeEventListener('focus', handleFocus);
+  }, [messages, activeChatId, hideReceipts]);
+
+  // --- Safe Scroll Engine ---
+  const scrollToBottom = (behavior = 'smooth') => {
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: behavior === 'smooth' ? 'smooth' : 'auto'
+      });
+    }
+  };
+
+  const handleScroll = (e) => setShowScrollButton(e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight > 100);
+
+  // ==========================================
+  // ✨ CONTEXT-AWARE AI ENGINE
+  // ==========================================
+  const generateAIQuickReplies = async () => {
+    if (showAIReplies && aiReplies.length > 0) { setShowAIReplies(false); return; }
+    if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('PASTE')) return alert("Missing API Key");
+
+    setIsGeneratingAI(true); setShowAIReplies(true); setAiReplies([]);
+
+    try {
+      const recentMessages = messages.slice(-3);
+      if (recentMessages.length === 0) {
+        setAiReplies(["How can I assist you?", "Please send details.", "I'm looking into it."]);
+        return setIsGeneratingAI(false);
+      }
+      const waitingOnClient = recentMessages[recentMessages.length - 1].sender === 'admin';
+      const transcript = recentMessages.map(m => `${m.sender === 'admin' ? 'Agent' : 'Client'}:${m.isImage ? '[Img]' : m.text}`).join('|');
+      const prompt = `Context:${transcript}|Task:Return JSON array of exactly 3 short professional ${waitingOnClient ? 'follow-ups' : 'support answers'}. Max 4 words each.`;
+
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite", generationConfig: { responseMimeType: "application/json", maxOutputTokens: 50 } });
+      const result = await model.generateContent(prompt);
+      const parsedReplies = JSON.parse(result.response.text());
+      setAiReplies(Array.isArray(parsedReplies) ? parsedReplies.slice(0,3) : ["Understood.", "I'll check.", "Thank you."]);
+    } catch (error) { setAiReplies(["Understood.", "Checking now.", "Thanks."]); } 
+    finally { setIsGeneratingAI(false); }
+  };
+
+  // --- ID Management ---
   const handleCreateCode = async (e) => {
     e.preventDefault();
     if (!newCodeId.trim()) return;
     let expiresAt = null;
     if (parseInt(expiryHours) > 0) expiresAt = Date.now() + (parseInt(expiryHours) * 60 * 60 * 1000);
-    await setDoc(doc(db, 'access_codes', newCodeId), { type: expiresAt ? "temporary" : "permanent", status: "active", createdAt: Date.now(), expiresAt: expiresAt });
+    await setDoc(doc(db, 'access_codes', newCodeId), { type: expiresAt ? "temporary" : "permanent", status: "active", createdAt: Date.now(), expiresAt: expiresAt, name: newCodeName.trim() || "" });
     await setDoc(doc(db, 'chats', newCodeId), { userTyping: false, adminTyping: false, userOnline: false }, { merge: true });
-    setNewCodeId("");
+    navigator.clipboard.writeText(newCodeId);
+    setNewCodeId(""); setNewCodeName("");
   };
+
+  const renameCode = async (codeId, currentName) => {
+    const newName = window.prompt("Enter a friendly name for this client/chat:", currentName || "");
+    if (newName !== null) await updateDoc(doc(db, 'access_codes', codeId), { name: newName.trim() });
+  };
+
+  const copyToClipboard = (text) => { navigator.clipboard.writeText(text); alert(`Copied ID to clipboard!`); };
 
   const cleanupExpiredIDs = async () => {
     const now = Date.now();
     for (const code of accessCodes) {
       if (code.expiresAt && code.expiresAt < now) {
         await deleteDoc(doc(db, 'access_codes', code.id));
-        if (activeChatId === code.id) setActiveChatId(null);
+        if (activeChatId === code.id) { setActiveChatId(null); setShowMobileChat(false); }
       }
     }
   };
@@ -135,70 +230,113 @@ export default function AdminDashboard() {
   const deleteCode = async (id) => {
     if(window.confirm(`Permanently delete chat ID: ${id}?`)) {
       await deleteDoc(doc(db, 'access_codes', id));
-      if (activeChatId === id) setActiveChatId(null);
+      if (activeChatId === id) { setActiveChatId(null); setShowMobileChat(false); }
     }
   };
 
   const toggleBlockStatus = async (id, currentStatus) => {
     const newStatus = currentStatus === "active" ? "blocked" : "active";
     await updateDoc(doc(db, 'access_codes', id), { status: newStatus });
-    if (activeChatId === id && newStatus === "blocked") setActiveChatId(null);
+    if (activeChatId === id && newStatus === "blocked") { setActiveChatId(null); setShowMobileChat(false); }
   };
 
-  // --- Message Handlers ---
+  // --- Message Engine ---
+  const handleImageSelect = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setPendingImage(file);
+    setPreviewUrl(URL.createObjectURL(file));
+    e.target.value = null; 
+  };
+
   const handleSendMessage = async (e, overrideText = null) => {
     if (e) e.preventDefault();
-    const textToSend = overrideText || newMessage;
-    if (!textToSend.trim() || !activeChatId) return;
+    const textToSend = overrideText || newMessage.trim();
+
+    if (!textToSend && !pendingImage) return; 
+    if (!activeChatId || isUploading) return;
     
     if (editingMsgId) {
-      try {
-        await updateDoc(doc(db, 'chats', activeChatId, 'messages', editingMsgId), { text: textToSend, isEdited: true });
-        setEditingMsgId(null); setNewMessage("");
-      } catch (error) { console.error("Edit Error:", error); }
+      updateDoc(doc(db, 'chats', activeChatId, 'messages', editingMsgId), { text: textToSend, isEdited: true }).catch(()=>{});
+      setEditingMsgId(null); setNewMessage("");
+      if (textareaRef.current) textareaRef.current.style.height = '48px';
       return;
     }
 
-    setNewMessage("");
-    setShowQuickReplies(false);
+    const currentImg = pendingImage;
+    const currentText = textToSend;
+    
+    setIsUploading(true);
+    setNewMessage(""); setPendingImage(null); setPreviewUrl(null); setShowAIReplies(false);
+    if (textareaRef.current) textareaRef.current.style.height = '48px';
+    scrollToBottom('auto');
+
+    if(!ghostMode) setDoc(doc(db, 'chats', activeChatId), { adminTyping: false }, { merge: true }).catch(() => {});
+
     try {
-      if(!ghostMode) setDoc(doc(db, 'chats', activeChatId), { adminTyping: false }, { merge: true }).catch(() => {});
-      await addDoc(collection(db, 'chats', activeChatId, 'messages'), { text: textToSend, sender: "admin", timestamp: serverTimestamp() });
-    } catch (error) { console.error("Message Error:", error); }
+      if (currentImg) {
+        let base64Image = "";
+        if (compressImage) {
+          const img = new Image(); img.src = URL.createObjectURL(currentImg);
+          await new Promise((resolve) => {
+            img.onload = () => {
+              const canvas = document.createElement('canvas');
+              const MAX_WIDTH = 1200; 
+              const scaleSize = Math.min(MAX_WIDTH / img.width, 1);
+              canvas.width = img.width * scaleSize; canvas.height = img.height * scaleSize;
+              canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+              base64Image = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+              resolve();
+            };
+          });
+        } else {
+          const reader = new FileReader();
+          await new Promise(resolve => { reader.onload = (event) => { base64Image = event.target.result.split(',')[1]; resolve(); }; reader.readAsDataURL(currentImg); });
+        }
+        
+        const formData = new FormData(); formData.append('image', base64Image);
+        const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
+        const json = await res.json();
+        if (!json.success) throw new Error("Upload Failed");
+
+        await addDoc(collection(db, 'chats', activeChatId, 'messages'), { text: json.data.url, isImage: true, sender: "admin", timestamp: serverTimestamp(), status: "sent" });
+      }
+
+      if (currentText) {
+        await addDoc(collection(db, 'chats', activeChatId, 'messages'), { text: currentText, isImage: false, sender: "admin", timestamp: serverTimestamp(), status: "sent" });
+      }
+      scrollToBottom('auto');
+    } catch (err) {
+      alert("Delivery Failed: ID may be blocked or expired.");
+    } finally {
+      setIsUploading(false);
+    }
   };
 
   const handleTyping = (e) => {
     setNewMessage(e.target.value);
-    if (activeChatId && !ghostMode) {
-      setDoc(doc(db, 'chats', activeChatId), { adminTyping: e.target.value.length > 0 }, { merge: true }).catch(() => {});
-    }
+    if (activeChatId && !ghostMode) setDoc(doc(db, 'chats', activeChatId), { adminTyping: e.target.value.length > 0 }, { merge: true }).catch(()=>{});
   };
 
-  const deleteMessage = async (msgId) => {
-    if (window.confirm("Delete this message?")) await deleteDoc(doc(db, 'chats', activeChatId, 'messages', msgId));
-  };
-
-  const clearEntireChatHistory = async () => {
-    if (window.confirm("NUKE PROTOCOL: Permanently delete ALL messages?")) {
-      messages.forEach(async (msg) => await deleteDoc(doc(db, 'chats', activeChatId, 'messages', msg.id)));
-    }
-  };
-
+  const deleteMessage = (msgId) => { if (window.confirm("Delete this message?")) deleteDoc(doc(db, 'chats', activeChatId, 'messages', msgId)).catch(()=>{}); };
+  const clearEntireChatHistory = () => { if (window.confirm("NUKE PROTOCOL: Permanently delete ALL messages?")) { messages.forEach(msg => deleteDoc(doc(db, 'chats', activeChatId, 'messages', msg.id)).catch(()=>{})); } };
+  
   const exportChatHistory = () => {
     if (!messages.length) return alert("No messages to export.");
-    const content = messages.map(m => {
-      const time = m.timestamp ? new Date(m.timestamp.toDate()).toLocaleString() : "Unknown Time";
-      return `[${time}] ${m.sender.toUpperCase()}: ${m.text}`;
-    }).join('\n');
+    const content = messages.map(m => `[${m.timestamp && typeof m.timestamp.toDate === 'function' ? new Date(m.timestamp.toDate()).toLocaleString() : "Unknown"}] ${m.sender.toUpperCase()}: ${m.isImage ? '[IMAGE]' : m.text}`).join('\n');
     const blob = new Blob([content], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `GlassChat_Transcript_${activeChatId}.txt`; a.click();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Transcript_${activeChatId}.txt`; a.click();
   };
 
-  const formatLastSeen = (timestamp) => {
-    if (!timestamp) return "Never";
-    const date = timestamp.toDate();
+  // ✅ 100% CRASH-PROOF TIMESTAMP FORMATTERS
+  const formatTime = (ts) => {
+    if (!ts || typeof ts.toDate !== 'function') return "Sending...";
+    return new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(ts.toDate());
+  };
+
+  const formatLastSeen = (ts) => {
+    if (!ts || typeof ts.toDate !== 'function') return "Never";
+    const date = ts.toDate();
     const diffMins = Math.floor((new Date() - date) / 60000);
     if (diffMins < 1) return "Just now";
     if (diffMins < 60) return `${diffMins}m ago`;
@@ -206,259 +344,378 @@ export default function AdminDashboard() {
     return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(date);
   };
 
-  // --- Animation Variants ---
-  const staggerContainer = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.05 } } };
-  const popItem = { hidden: { opacity: 0, y: 10, scale: 0.95 }, show: { opacity: 1, y: 0, scale: 1, transition: { type: "spring", stiffness: 400, damping: 25 } } };
+  const MessageStatusIcon = ({ msg }) => {
+    if (!msg.timestamp || typeof msg.timestamp.toDate !== 'function') return <Clock size={12} className="text-white/60 ml-1" />; 
+    if (msg.status === 'seen') return <CheckCheck size={14} className="text-sky-300 drop-shadow-sm ml-1" />;
+    if (msg.status === 'delivered') return <CheckCheck size={14} className="text-white/80 ml-1" />;
+    return <Check size={14} className="text-white/80 ml-1" />; 
+  };
 
-  // --- Render Login ---
-  if (authLoading) return <div className="flex h-screen items-center justify-center text-white bg-[#0a0f1a]">Loading Core Engine...</div>;
+  const getDisplayName = (code) => code.name ? code.name : code.id;
+
+  if (authLoading) return <div className="flex h-screen items-center justify-center bg-[#f8f9fa] text-slate-800 font-bold">Loading Engine...</div>;
 
   if (!adminUser) {
     return (
-      <div className={`flex h-screen w-full items-center justify-center p-4 transition-colors duration-500 ${themeBg} relative overflow-hidden`}>
-        <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-blue-600/10 rounded-full mix-blend-multiply filter blur-[100px] animate-pulse"></div>
-        <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-indigo-600/10 rounded-full mix-blend-multiply filter blur-[100px] animate-pulse delay-1000"></div>
-        
-        <motion.div initial={{ opacity: 0, scale: 0.95, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} className={`w-full max-w-md p-10 flex flex-col items-center rounded-3xl z-10 transition-colors duration-500 ${panelBg}`}>
-          <ShieldHalf size={64} className="text-blue-500 mb-6 drop-shadow-lg" />
-          <h1 className={`text-3xl font-extrabold mb-2 tracking-wide ${themeText}`}>Command Center</h1>
-          <p className="text-gray-500 mb-8 text-center font-medium">Encrypted administrative gateway.</p>
-          <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} onClick={() => signInWithPopup(auth, googleProvider)} className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-500 hover:to-indigo-500 text-white font-bold py-4 rounded-2xl shadow-[0_0_20px_rgba(37,99,235,0.3)] transition-all">
-            Authenticate Identity
-          </motion.button>
+      <div className="flex h-[100dvh] w-full items-center justify-center p-4 bg-[#f8f9fa] relative overflow-hidden font-sans text-slate-800">
+        <div className="absolute inset-0 pointer-events-none z-0">
+          <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-orange-300/20 blur-[100px]" />
+          <div className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-amber-200/20 blur-[100px]" />
+        </div>
+        <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md p-10 flex flex-col items-center rounded-3xl z-10 bg-white/60 backdrop-blur-xl border border-white/50 shadow-xl">
+          <ShieldHalf size={56} className="text-orange-500 mb-6" />
+          <h1 className="text-2xl font-bold mb-2 tracking-tight">Command Center</h1>
+          <p className="text-slate-500 mb-8 text-sm text-center">Secure administrator login.</p>
+          <button onClick={() => signInWithPopup(auth, googleProvider)} className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-3.5 rounded-xl shadow-md transition-colors">Authenticate</button>
         </motion.div>
       </div>
     );
   }
 
-  // --- Render Dashboard ---
   return (
-    <div className={`flex h-screen w-full font-sans selection:bg-blue-500/30 overflow-hidden relative transition-colors duration-500 ${themeBg} ${themeText}`}>
+    // STRICT ABSOLUTE SHELL
+    <div className="fixed inset-0 w-full flex flex-col sm:flex-row bg-[#f8f9fa] overflow-hidden font-sans text-slate-800">
       
-      {/* 1. Sidebar Dock */}
-      <div className={`w-20 sm:w-24 h-full flex flex-col items-center py-6 z-20 transition-colors duration-500 ${isDarkMode ? 'bg-white/5 border-r border-white/10' : 'bg-white border-r border-slate-200 shadow-xl'}`}>
-        <div className="w-12 h-12 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl shadow-lg flex items-center justify-center mb-8">
-          <Activity size={24} className="text-white" />
-        </div>
-        
-        <div className="flex flex-col gap-4 w-full px-4">
-          <NavButton icon={<MessageSquare size={22}/>} label="Chats" active={activeTab === 'chats'} onClick={() => setActiveTab('chats')} isDarkMode={isDarkMode}/>
-          <NavButton icon={<KeyRound size={22}/>} label="IDs" active={activeTab === 'ids'} onClick={() => setActiveTab('ids')} isDarkMode={isDarkMode}/>
-          <NavButton icon={<Settings size={22}/>} label="Settings" active={activeTab === 'settings'} onClick={() => setActiveTab('settings')} isDarkMode={isDarkMode}/>
-        </div>
-
-        <div className="mt-auto px-4 w-full flex flex-col gap-4">
-          {/* Theme Toggle */}
-          <button onClick={() => setIsDarkMode(!isDarkMode)} className={`w-full p-3 flex flex-col items-center justify-center rounded-2xl transition-all ${isDarkMode ? 'text-yellow-400 hover:bg-white/5' : 'text-slate-500 hover:bg-slate-100 hover:text-blue-600'}`}>
-            {isDarkMode ? <Sun size={22} /> : <Moon size={22} />}
-          </button>
-          
-          <button onClick={() => signOut(auth)} className={`w-full p-3 flex flex-col items-center justify-center gap-1 rounded-2xl transition-all group ${isDarkMode ? 'text-gray-500 hover:text-red-400 hover:bg-white/5' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}>
-            <LogOut size={22} className="group-hover:-translate-x-1 transition-transform" />
-            <span className="text-[10px] font-bold tracking-widest">EXIT</span>
-          </button>
-        </div>
+      <div className="absolute inset-0 pointer-events-none z-0">
+        <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-orange-300/20 blur-[100px]" />
+        <div className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-amber-200/20 blur-[100px]" />
       </div>
 
-      {/* 2. Main Content Area */}
-      <div className="flex-1 flex overflow-hidden z-10 p-4 sm:p-6 gap-6">
+      <AnimatePresence>
+        {selectedImage && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setSelectedImage(null)}>
+            <button className="absolute top-6 right-6 text-white/70 hover:text-white p-2 rounded-full transition-colors z-50"><X size={28}/></button>
+            <img src={selectedImage} alt="Fullscreen Attachment" className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Nav Dock */}
+      <nav className="order-last sm:order-first flex-none h-[calc(60px+env(safe-area-inset-bottom))] sm:h-full sm:w-[88px] bg-white/70 backdrop-blur-xl border-t sm:border-t-0 sm:border-r border-slate-200/60 flex sm:flex-col items-center justify-around sm:justify-start sm:py-6 z-40 pb-[env(safe-area-inset-bottom)] sm:pb-6">
+        <div className="hidden sm:flex w-12 h-12 bg-gradient-to-br from-orange-400 to-amber-500 rounded-xl shadow-sm items-center justify-center mb-6 text-white">
+          <Activity size={24} />
+        </div>
+        <div className="flex sm:flex-col gap-1 sm:gap-3 w-full px-2 sm:px-4 justify-around sm:justify-start">
+          <NavButton icon={<MessageSquare size={22}/>} label="Chats" active={activeTab === 'chats'} onClick={() => {setActiveTab('chats'); setShowMobileChat(false);}} />
+          <NavButton icon={<KeyRound size={22}/>} label="IDs" active={activeTab === 'ids'} onClick={() => {setActiveTab('ids'); setShowMobileChat(false);}} />
+          <NavButton icon={<Settings size={22}/>} label="Settings" active={activeTab === 'settings'} onClick={() => {setActiveTab('settings'); setShowMobileChat(false);}} />
+          <div className="flex sm:hidden">
+            <button onClick={() => signOut(auth)} className="p-3 rounded-xl text-red-500 hover:bg-red-50 transition-colors"><LogOut size={22} /></button>
+          </div>
+        </div>
+        <div className="hidden sm:flex mt-auto px-4 w-full flex-col gap-2">
+          <button onClick={() => signOut(auth)} className="w-full py-3 flex flex-col items-center gap-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-xl transition-colors">
+            <LogOut size={20} /> <span className="text-[10px] font-bold">EXIT</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* Main Container */}
+      <main className="flex-1 flex overflow-hidden z-10 relative">
         <AnimatePresence mode="wait">
           
           {/* --- TAB: CHATS --- */}
           {activeTab === 'chats' && (
-            <motion.div key="chats" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} transition={{ duration: 0.3 }} className="flex w-full h-full gap-6">
+            <motion.div key="chats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="flex w-full h-full overflow-hidden">
               
-              {/* Active Chats List */}
-              <div className={`w-1/3 max-w-sm flex flex-col rounded-3xl overflow-hidden transition-colors duration-500 ${panelBg}`}>
-                <div className={`p-6 border-b flex justify-between items-center ${isDarkMode ? 'border-white/10 bg-black/20' : 'border-slate-100 bg-slate-50'}`}>
-                  <h2 className="font-extrabold tracking-wide text-lg">Active Sessions</h2>
-                  <div className="px-3 py-1 bg-blue-500/10 text-blue-600 dark:text-blue-400 rounded-full text-xs font-bold">{accessCodes.filter(c=>c.status==='active').length}</div>
+              {/* Sidebar List */}
+              <div className={`w-full sm:w-[320px] flex-shrink-0 flex flex-col h-full bg-white/40 backdrop-blur-md border-r border-slate-200/50 ${showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
+                <div className="p-5 border-b border-slate-200/50 flex justify-between items-center" style={{ paddingTop: 'calc(1.25rem + env(safe-area-inset-top))' }}>
+                  <h2 className="font-bold text-lg">Sessions</h2>
+                  <div className="px-2.5 py-1 bg-orange-100 text-orange-600 rounded-full text-xs font-bold">{accessCodes.filter(c=>c.status==='active').length}</div>
                 </div>
-                <motion.div variants={staggerContainer} initial="hidden" animate="show" className="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
-                  {accessCodes.filter(c => c.status === 'active').map(code => (
-                    <motion.div variants={popItem} key={code.id} onClick={() => setActiveChatId(code.id)} className={`p-4 rounded-2xl border cursor-pointer transition-all ${activeChatId === code.id ? (isDarkMode ? 'bg-blue-600/20 border-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.15)]' : 'bg-blue-50 border-blue-500 shadow-md text-blue-700') : (isDarkMode ? 'bg-black/20 border-white/5 hover:bg-white/10' : 'bg-white border-slate-100 hover:border-slate-300 hover:shadow-sm')}`}>
-                      <div className="font-bold tracking-wider font-mono text-sm">{code.id}</div>
-                    </motion.div>
-                  ))}
-                  {accessCodes.filter(c => c.status === 'active').length === 0 && <p className="text-gray-400 text-sm text-center mt-10">No active IDs available.</p>}
-                </motion.div>
+                <div className="flex-1 overflow-y-auto p-3 space-y-2 custom-scrollbar">
+                  {accessCodes.filter(c => c.status === 'active').map(code => {
+                    const isActive = activeChatId === code.id;
+                    return (
+                      <div key={code.id} onClick={() => {setActiveChatId(code.id); setShowMobileChat(true);}} className={`p-3.5 rounded-xl border cursor-pointer transition-colors flex justify-between items-center group ${isActive ? 'bg-orange-500 border-orange-600 shadow-md text-white' : 'bg-white border-slate-200 hover:border-orange-300 shadow-sm text-slate-800'}`}>
+                        <div className="flex flex-col overflow-hidden">
+                          <span className={`font-bold truncate text-[15px] ${isActive ? 'text-white' : 'text-slate-800'}`}>{getDisplayName(code)}</span>
+                          {code.name && <span className={`text-[10px] uppercase tracking-widest mt-0.5 ${isActive ? 'text-orange-200' : 'text-slate-400'}`}>{code.id}</span>}
+                        </div>
+                        <ChevronLeft size={18} className={`rotate-180 opacity-50 sm:hidden ${isActive ? 'text-white' : ''}`} />
+                      </div>
+                    )
+                  })}
+                  {accessCodes.filter(c => c.status === 'active').length === 0 && <p className="text-sm text-center mt-10 text-slate-500">No active sessions.</p>}
+                </div>
               </div>
 
-              {/* Chat Window */}
-              <div className={`flex-1 flex flex-col rounded-3xl overflow-hidden relative transition-colors duration-500 ${panelBg}`}>
+              {/* Chat View */}
+              <div className={`flex-1 flex flex-col h-full overflow-hidden relative ${!showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
                 {activeChatId ? (
                   <>
-                    <div className={`h-20 border-b flex items-center px-8 gap-5 z-20 justify-between ${isDarkMode ? 'border-white/10 bg-black/20' : 'border-slate-100 bg-slate-50'}`}>
-                      <div className="flex items-center gap-4">
+                    <header className="flex-none bg-white/60 backdrop-blur-md border-b border-slate-200/60 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-20" style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}>
+                      <div className="flex items-center gap-3">
+                        <button onClick={() => setShowMobileChat(false)} className="sm:hidden p-2 -ml-2 rounded-xl text-orange-500 hover:bg-orange-50"><ChevronLeft size={24} /></button>
                         <div className="relative">
-                          <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isDarkMode ? 'bg-white/10 border-white/20' : 'bg-white shadow-sm border-slate-200'}`}><MessageSquare size={20} className={isDarkMode ? "text-gray-300" : "text-blue-600"}/></div>
-                          {activeChatDoc?.userOnline && <span className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 border-2 border-white dark:border-[#0f172a] rounded-full shadow-sm"></span>}
+                          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-white shadow-sm border border-slate-200 text-orange-500"><MessageSquare size={18} /></div>
+                          {activeChatDoc?.userOnline && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 border-2 border-white rounded-full shadow-sm"></span>}
                         </div>
                         <div className="flex flex-col">
-                          <h3 className="font-bold text-lg tracking-wide">{activeChatId}</h3>
-                          <p className={`text-xs font-semibold ${activeChatDoc?.userOnline ? 'text-emerald-500' : 'text-gray-500'}`}>{activeChatDoc?.userOnline ? "Online right now" : `Last seen: ${formatLastSeen(activeChatDoc?.userLastSeen)}`}</p>
+                          <h3 className="font-bold text-[16px] tracking-tight">{getDisplayName(accessCodes.find(c=>c.id===activeChatId) || {id: activeChatId})}</h3>
+                          <p className={`text-[11px] font-medium ${activeChatDoc?.userOnline ? 'text-emerald-500' : 'text-slate-500'}`}>{activeChatDoc?.userOnline ? "Online now" : `Seen ${formatLastSeen(activeChatDoc?.userLastSeen)}`}</p>
                         </div>
                       </div>
-
-                      <div className="flex items-center gap-3">
-                        {ghostMode && <div className="flex items-center gap-2 bg-amber-500/10 border border-amber-500/20 px-3 py-1.5 rounded-full text-amber-500"><Ghost size={14} /> <span className="text-xs font-bold uppercase tracking-wider">Stealth</span></div>}
-                        <button onClick={exportChatHistory} title="Export Chat" className={`p-2.5 rounded-xl transition-all ${isDarkMode ? 'bg-blue-500/10 hover:bg-blue-500/20 text-blue-400 border-blue-500/20' : 'bg-blue-50 hover:bg-blue-100 text-blue-600 border border-blue-200'}`}><Download size={18} /></button>
-                        <button onClick={clearEntireChatHistory} title="Nuke Chat" className={`p-2.5 rounded-xl transition-all ${isDarkMode ? 'bg-red-500/10 hover:bg-red-500/20 text-red-400 border-red-500/20' : 'bg-red-50 hover:bg-red-100 text-red-600 border border-red-200'}`}><Eraser size={18} /></button>
+                      <div className="flex items-center gap-2">
+                        {ghostMode && <div className="hidden sm:flex items-center gap-1.5 bg-amber-50 border border-amber-200 px-2.5 py-1 rounded-md text-amber-600"><Ghost size={12} /> <span className="text-[10px] font-bold uppercase tracking-widest">Ghost</span></div>}
+                        <button onClick={exportChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-orange-500 shadow-sm"><Download size={18} /></button>
+                        <button onClick={clearEntireChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-red-500 shadow-sm"><Eraser size={18} /></button>
                       </div>
-                    </div>
+                    </header>
                     
-                    <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar">
-                      {messages.map((msg) => {
-                        const isAdmin = msg.sender === 'admin';
-                        return (
-                          <motion.div initial={{ opacity: 0, y: 15, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }} key={msg.id} layout className={`flex ${isAdmin ? 'justify-end' : 'justify-start'} group relative`}>
-                            <div className={`relative px-6 py-4 max-w-[75%] text-[15px] leading-relaxed shadow-sm border ${isAdmin ? 'bg-gradient-to-br from-blue-600 to-indigo-600 border-blue-500/50 text-white rounded-3xl rounded-tr-sm' : (isDarkMode ? 'bg-white/10 border-white/5 text-gray-200 rounded-3xl rounded-tl-sm' : 'bg-white border-slate-200 text-slate-800 rounded-3xl rounded-tl-sm')}`}>
-                              {msg.text}
-                              {msg.isEdited && <div className={`text-[10px] mt-1.5 italic text-right ${isAdmin ? 'text-white/70' : 'text-gray-400'}`}>Edited</div>}
-                            </div>
-                            {isAdmin && (
-                              <div className="absolute top-1/2 -translate-y-1/2 -left-20 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-                                <button onClick={() => {setEditingMsgId(msg.id); setNewMessage(msg.text);}} className={`p-2 rounded-lg transition-all ${isDarkMode ? 'bg-white/10 hover:bg-blue-500/30 text-blue-300' : 'bg-white shadow-sm hover:bg-blue-50 text-blue-600'}`}><Edit2 size={14}/></button>
-                                <button onClick={() => deleteMessage(msg.id)} className={`p-2 rounded-lg transition-all ${isDarkMode ? 'bg-white/10 hover:bg-red-500/30 text-red-300' : 'bg-white shadow-sm hover:bg-red-50 text-red-600'}`}><Trash2 size={14}/></button>
+                    <main ref={chatContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col items-center z-10 custom-scrollbar relative">
+                      <div className="w-full max-w-4xl flex flex-col gap-4 pb-2">
+                        <AnimatePresence mode="popLayout">
+                          {messages.map((msg) => {
+                            const isAdmin = msg.sender === 'admin';
+                            return (
+                              <motion.div key={msg.id} layout="position" variants={fadeUp} initial="hidden" animate="visible" className={`flex ${isAdmin ? 'justify-end' : 'justify-start'} group relative`}>
+                                <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border ${isAdmin ? 'bg-orange-500 border-orange-600 text-white rounded-tr-sm' : 'bg-white border-slate-200 text-slate-800 rounded-tl-sm'}`}>
+                                  {msg.isImage ? (
+                                    <div className="relative group/img cursor-zoom-in rounded-lg overflow-hidden mb-1" onClick={() => setSelectedImage(msg.text)}>
+                                      <img src={msg.text} alt="Attachment" className="w-full max-w-[240px] sm:max-w-[320px] object-cover transition-transform duration-300 group-hover/img:scale-105" />
+                                      <div className="absolute inset-0 bg-slate-900/0 group-hover/img:bg-slate-900/10 transition-colors flex items-center justify-center"><Maximize className="text-white opacity-0 group-hover/img:opacity-100" size={24} /></div>
+                                    </div>
+                                  ) : (
+                                    <p className="whitespace-pre-wrap break-words text-[15px] sm:text-[16px] leading-relaxed">{msg.text}</p>
+                                  )}
+                                  <div className={`text-[10px] font-medium mt-1.5 flex items-center gap-0.5 ${isAdmin ? 'justify-end text-orange-100' : 'justify-start text-slate-400'}`}>
+                                    {msg.isEdited && <span className="italic mr-1">(edited)</span>}
+                                    {formatTime(msg.timestamp)}
+                                    {isAdmin && !hideReceipts && <MessageStatusIcon msg={msg} />}
+                                    {isAdmin && hideReceipts && <Check size={14} className="text-white/70 ml-1" />}
+                                  </div>
+                                </div>
+                                
+                                {isAdmin && !msg.isImage && (
+                                  <div className="hidden sm:flex absolute top-1/2 -translate-y-1/2 -left-20 opacity-0 group-hover:opacity-100 transition-opacity gap-1.5">
+                                    <button onClick={() => {setEditingMsgId(msg.id); setNewMessage(msg.text);}} className="p-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:text-orange-500 text-slate-400"><Edit2 size={14}/></button>
+                                    <button onClick={() => deleteMessage(msg.id)} className="p-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:text-red-500 text-slate-400"><Trash2 size={14}/></button>
+                                  </div>
+                                )}
+                                {isAdmin && msg.isImage && (
+                                  <div className="hidden sm:flex absolute top-1/2 -translate-y-1/2 -left-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button onClick={() => deleteMessage(msg.id)} className="p-2 rounded-xl bg-white border border-slate-200 shadow-sm hover:text-red-500 text-slate-400"><Trash2 size={14}/></button>
+                                  </div>
+                                )}
+                              </motion.div>
+                            )
+                          })}
+                          {activeChatDoc?.userTyping && (
+                            <motion.div layout="position" variants={fadeUp} initial="hidden" animate="visible" exit="hidden" className="flex justify-start">
+                              <div className="px-4 py-3 rounded-2xl rounded-tl-sm border bg-white border-slate-200 shadow-sm flex items-center gap-2">
+                                <span className="text-[10px] font-bold uppercase tracking-widest text-slate-400">Client typing</span>
+                                <div className="flex gap-1 ml-1"><div className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce"/><div className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'0.15s'}}/><div className="w-1.5 h-1.5 bg-orange-400 rounded-full animate-bounce" style={{animationDelay:'0.3s'}}/></div>
+                              </div>
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+                        <div ref={messagesEndRef} className="h-1" />
+                      </div>
+                    </main>
+
+                    <AnimatePresence>
+                      {showScrollButton && (
+                        <motion.button initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={animTween} onClick={() => scrollToBottom('smooth')} className="absolute bottom-32 right-6 p-3 bg-white text-orange-500 rounded-full shadow-md border border-slate-100 z-30">
+                          <ChevronDown size={20} strokeWidth={3} />
+                        </motion.button>
+                      )}
+                    </AnimatePresence>
+
+                    {/* Footer Composer */}
+                    <footer className="flex-none bg-white/70 backdrop-blur-lg border-t border-slate-200/60 px-3 sm:px-6 py-3 z-20 flex flex-col items-center">
+                      <div className="w-full max-w-4xl flex flex-col gap-2 relative">
+                        
+                        <AnimatePresence>
+                          {showAIReplies && (
+                            <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className="flex gap-2 overflow-x-auto no-scrollbar py-1">
+                              {isGeneratingAI ? (
+                                <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200 text-xs font-semibold">
+                                  <Loader2 size={14} className="animate-spin" /> Flash-Lite analyzing...
+                                </div>
+                              ) : (
+                                aiReplies.map((reply, i) => (
+                                  <button key={i} onClick={() => handleSendMessage(null, reply)} className="text-[12px] whitespace-nowrap font-medium px-4 py-1.5 rounded-full bg-white border border-slate-200 text-slate-700 hover:border-orange-300 hover:text-orange-600 shadow-sm transition-colors min-h-[36px]">
+                                    {reply}
+                                  </button>
+                                ))
+                              )}
+                            </motion.div>
+                          )}
+                        </AnimatePresence>
+
+                        <form className="flex gap-2 items-end w-full">
+                          <div className="flex gap-1 mb-1">
+                            <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageSelect} className="hidden" />
+                            <button type="button" onClick={() => { ignoreBlurRef.current = true; fileInputRef.current?.click(); }} disabled={isUploading} className="p-2.5 sm:p-3 rounded-xl bg-white border border-slate-200 text-slate-500 hover:text-orange-500 shadow-sm disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
+                              {isUploading ? <Loader2 size={20} className="animate-spin" /> : <ImageIcon size={20}/>}
+                            </button>
+                            <button type="button" onClick={generateAIQuickReplies} title="AI Replies" className="p-2.5 sm:p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-600 hover:bg-amber-100 shadow-sm min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
+                              <Sparkles size={20} className={isGeneratingAI ? "animate-pulse" : ""} />
+                            </button>
+                          </div>
+
+                          <div className="flex-1 relative bg-white border border-slate-200 rounded-2xl shadow-sm focus-within:border-orange-400 focus-within:ring-2 focus-within:ring-orange-100 transition-all flex flex-col p-1.5">
+                            
+                            {/* Inline Image Preview */}
+                            {previewUrl && (
+                              <div className="relative mb-2 ml-2 mt-2 inline-block w-max">
+                                <img src={previewUrl} className="h-20 w-auto rounded-lg border border-slate-200 object-cover shadow-sm" alt="Preview" />
+                                <button type="button" onClick={() => { setPendingImage(null); setPreviewUrl(null); }} className="absolute -top-2 -right-2 bg-slate-800 text-white rounded-full p-1 hover:bg-red-500 shadow-md transition-colors z-10"><X size={12}/></button>
+                                <button type="button" onClick={() => setCompressImage(!compressImage)} className={`absolute bottom-2 left-2 text-[10px] font-bold px-2 py-1 rounded-md border z-10 transition-colors backdrop-blur-md shadow-sm ${compressImage ? 'bg-orange-500/90 text-white border-orange-400' : 'bg-slate-800/80 text-white border-slate-600'}`}>
+                                  {compressImage ? '⚡ Fast' : '💎 HQ'}
+                                </button>
                               </div>
                             )}
-                          </motion.div>
-                        )
-                      })}
-                      {activeChatDoc?.userTyping && (
-                        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex justify-start">
-                          <div className={`px-6 py-5 rounded-3xl rounded-tl-sm border flex gap-1.5 items-center ${isDarkMode ? 'bg-white/5 border-white/5' : 'bg-white border-slate-200 shadow-sm'}`}><div className={`w-1.5 h-1.5 rounded-full animate-bounce ${isDarkMode ? 'bg-gray-400' : 'bg-blue-500'}`}/><div className={`w-1.5 h-1.5 rounded-full animate-bounce ${isDarkMode ? 'bg-gray-400' : 'bg-blue-500'}`} style={{animationDelay:'0.1s'}}/><div className={`w-1.5 h-1.5 rounded-full animate-bounce ${isDarkMode ? 'bg-gray-400' : 'bg-blue-500'}`} style={{animationDelay:'0.2s'}}/></div>
-                        </motion.div>
-                      )}
-                      <div ref={messagesEndRef} />
-                    </div>
 
-                    {/* Quick Replies & Input */}
-                    <div className={`p-6 border-t z-10 transition-colors duration-500 ${isDarkMode ? 'border-white/10 bg-black/20' : 'border-slate-200 bg-white'}`}>
-                      <AnimatePresence>
-                        {showQuickReplies && (
-                          <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex flex-wrap gap-2 mb-4 max-w-5xl mx-auto overflow-hidden">
-                            {QUICK_REPLIES.map((reply, i) => (
-                              <button key={i} onClick={() => handleSendMessage(null, reply)} className={`text-xs font-semibold px-4 py-2 rounded-full transition-all border ${isDarkMode ? 'bg-blue-500/10 border-blue-500/20 text-blue-300 hover:bg-blue-500/30' : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'}`}>{reply}</button>
-                            ))}
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                      
-                      <form onSubmit={(e) => handleSendMessage(e)} className="flex gap-3 max-w-5xl mx-auto relative items-center">
-                        <button type="button" onClick={() => setShowQuickReplies(!showQuickReplies)} className={`p-3.5 rounded-2xl transition-all shadow-sm ${isDarkMode ? 'bg-white/5 hover:bg-white/10 text-yellow-400' : 'bg-yellow-50 hover:bg-yellow-100 text-yellow-600 border border-yellow-200'}`} title="Quick Replies"><Zap size={20}/></button>
-                        
-                        {editingMsgId && <button type="button" onClick={() => {setEditingMsgId(null); setNewMessage("");}} className="px-4 bg-gray-500 text-white rounded-2xl shadow-md"><X size={20}/></button>}
-                        
-                        <input type="text" value={newMessage} onChange={handleTyping} placeholder={editingMsgId ? "Edit your message..." : (ghostMode ? "Type silently..." : "Transmit message...")} className={`flex-1 rounded-2xl pl-6 pr-16 py-4 transition-all shadow-inner font-medium focus:outline-none focus:ring-4 ${inputBg} ${editingMsgId ? 'ring-amber-500/30' : 'focus:ring-blue-500/20'}`}/>
-                        
-                        <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} type="submit" disabled={!newMessage.trim()} className={`absolute right-2 top-2 bottom-2 px-5 disabled:opacity-0 text-white rounded-xl transition-all shadow-lg flex items-center ${editingMsgId || ghostMode ? 'bg-amber-500 hover:bg-amber-400' : 'bg-blue-600 hover:bg-blue-500'}`}>
-                          {editingMsgId ? <span className="text-sm font-bold">Save</span> : <Send size={20} className="ml-0.5" />}
-                        </motion.button>
-                      </form>
-                    </div>
+                            {editingMsgId && <button type="button" onClick={() => {setEditingMsgId(null); setNewMessage("");}} className="absolute top-2 left-2 p-1 bg-slate-100 text-slate-500 rounded hover:bg-slate-200 z-10"><X size={14}/></button>}
+                            
+                            <div className="flex items-end w-full">
+                              <textarea 
+                                ref={textareaRef} value={newMessage} 
+                                onChange={(e) => { setNewMessage(e.target.value); e.target.style.height = '48px'; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`; }}
+                                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e); } }}
+                                onChangeCapture={handleTyping} placeholder={previewUrl ? "Add a caption (optional)..." : (editingMsgId ? "Edit message..." : "Message...")} rows={1} disabled={isUploading}
+                                className={`flex-1 bg-transparent py-2.5 text-[16px] text-slate-800 placeholder-slate-400 focus:outline-none resize-none custom-scrollbar leading-relaxed ${editingMsgId ? 'pl-8' : 'pl-3'} pr-12`}
+                                style={{ minHeight: '48px' }}
+                              />
+                              <div className="absolute right-1.5 bottom-1.5">
+                                <motion.button onClick={handleSendMessage} type="button" whileTap={{ scale: 0.95 }} disabled={(!newMessage.trim() && !pendingImage) || isUploading} className={`p-2 rounded-xl text-white shadow-sm disabled:opacity-50 transition-opacity min-h-[36px] min-w-[36px] flex items-center justify-center ${editingMsgId || ghostMode ? 'bg-amber-500' : 'bg-orange-500'}`}>
+                                  {isUploading ? <Loader2 size={18} className="animate-spin" /> : (editingMsgId ? <span className="text-xs font-bold px-1">Save</span> : <Send size={18} className="ml-0.5" />)}
+                                </motion.button>
+                              </div>
+                            </div>
+                          </div>
+                        </form>
+                      </div>
+                    </footer>
                   </>
                 ) : (
-                   <div className="flex-1 flex flex-col items-center justify-center text-gray-400 gap-6 opacity-60"><MessageSquare size={80} strokeWidth={1} /><p className="text-xl font-medium tracking-wide">Select an active session to begin.</p></div>
+                   <div className="flex-1 flex flex-col items-center justify-center gap-4 opacity-60 text-slate-500 pt-[env(safe-area-inset-top)]"><MessageSquare size={48} strokeWidth={1.5} /><p className="text-lg font-medium">Select a session.</p></div>
                 )}
               </div>
             </motion.div>
           )}
 
-          {/* --- TAB: ID MANAGEMENT --- */}
+          {/* --- TAB: IDs --- */}
           {activeTab === 'ids' && (
-            <motion.div key="ids" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className={`w-full h-full flex flex-col rounded-3xl overflow-hidden p-8 transition-colors duration-500 ${panelBg}`}>
-              <div className={`flex justify-between items-center mb-8 border-b pb-6 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
+            <motion.div key="ids" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="w-full h-full flex flex-col overflow-hidden p-4 sm:p-8 pt-[calc(1rem+env(safe-area-inset-top))]">
+              <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 border-b border-slate-200/60 pb-4">
                 <div>
-                  <h2 className="text-3xl font-extrabold tracking-wide">Access Vectors</h2>
-                  <p className="text-gray-400 font-medium mt-1">Generate and control secure client invitations.</p>
+                  <h2 className="text-2xl font-bold tracking-tight">Access Vectors</h2>
+                  <p className="text-sm text-slate-500 mt-1">Manage client invitations.</p>
                 </div>
-                <button onClick={cleanupExpiredIDs} className={`flex items-center gap-2 px-5 py-3 rounded-xl transition-all font-bold shadow-sm ${isDarkMode ? 'bg-white/5 hover:bg-yellow-500/20 text-yellow-400 border border-yellow-500/30' : 'bg-yellow-50 hover:bg-yellow-100 text-yellow-700 border border-yellow-200'}`}>
-                  <Clock size={18}/> Clean Expired
+                <button onClick={cleanupExpiredIDs} className="flex items-center gap-2 px-4 py-2 rounded-xl font-semibold text-sm bg-white border border-slate-200 hover:border-orange-300 hover:text-orange-600 shadow-sm transition-colors">
+                  <Clock size={16}/> Clean Expired
                 </button>
               </div>
 
-              {/* ID Generator */}
-              <div className={`p-6 rounded-2xl mb-8 border shadow-sm ${isDarkMode ? 'bg-black/20 border-white/10' : 'bg-white border-slate-200'}`}>
-                <form onSubmit={handleCreateCode} className="flex gap-4 items-end">
+              <div className="p-5 rounded-2xl mb-6 bg-white/60 backdrop-blur-md border border-slate-200/60 shadow-sm flex-shrink-0">
+                <form onSubmit={handleCreateCode} className="flex flex-col md:flex-row gap-4 md:items-end">
                   <div className="flex-1">
-                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Custom ID</label>
-                    <input type="text" value={newCodeId} onChange={(e) => setNewCodeId(e.target.value)} placeholder="e.g., SECURE-01" className={`w-full rounded-xl px-5 py-4 focus:outline-none focus:ring-4 focus:ring-blue-500/20 transition-all font-mono uppercase font-bold shadow-inner ${inputBg}`}/>
+                    <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 block text-slate-500">Custom ID</label>
+                    <input type="text" value={newCodeId} onChange={(e) => setNewCodeId(e.target.value)} placeholder="VIP-01" className="w-full rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-orange-400/50 transition-all font-mono uppercase font-bold border border-slate-200 text-sm bg-white"/>
                   </div>
                   <div className="flex-1">
-                    <label className="text-[11px] font-bold text-gray-400 uppercase tracking-widest mb-2 block">Expiration Window</label>
-                    <select value={expiryHours} onChange={(e) => setExpiryHours(e.target.value)} className={`w-full rounded-xl px-5 py-4 outline-none cursor-pointer transition-all font-medium appearance-none shadow-inner ${inputBg}`}>
-                      <option value="1">⏱ 1 Hour</option>
-                      <option value="2">⏱ 2 Hours</option>
-                      <option value="3">⏱ 3 Hours</option>
-                      <option value="4">⏱ 4 Hours</option>
-                      <option value="5">⏱ 5 Hours</option>
-                      <option value="6">⏱ 6 Hours</option>
-                      <option value="12">⏱ 12 Hours</option>
-                      <option value="24">⏱ 24 Hours</option>
+                    <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 block text-slate-500">Client Name (Optional)</label>
+                    <input type="text" value={newCodeName} onChange={(e) => setNewCodeName(e.target.value)} placeholder="John Doe" className="w-full rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-orange-400/50 transition-all font-bold border border-slate-200 text-sm bg-white"/>
+                  </div>
+                  <div className="w-full md:w-48">
+                    <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 block text-slate-500">Window</label>
+                    <select value={expiryHours} onChange={(e) => setExpiryHours(e.target.value)} className="w-full rounded-xl px-4 py-3 outline-none font-medium appearance-none border border-slate-200 text-sm bg-white">
                       <option value="0">∞ Permanent</option>
+                      <option value="1">⏱ 1 Hour</option>
+                      <option value="24">⏱ 24 Hours</option>
                     </select>
                   </div>
-                  <motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} type="submit" disabled={!newCodeId.trim()} className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white px-8 py-4 rounded-xl font-bold flex items-center gap-2 shadow-lg h-[58px]">
-                    <Plus size={20}/> Generate
+                  <motion.button whileTap={{ scale: 0.95 }} type="submit" disabled={!newCodeId.trim()} className="bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-bold flex items-center justify-center gap-2 shadow-sm min-h-[46px]">
+                    <Plus size={18}/> Generate
                   </motion.button>
                 </form>
               </div>
 
-              {/* ID List Grid */}
-              <div className="flex-1 overflow-y-auto custom-scrollbar pr-2">
-                <motion.div variants={staggerContainer} initial="hidden" animate="show" className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
+              <div className="flex-1 overflow-y-auto custom-scrollbar pr-1 pb-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                   <AnimatePresence>
                     {accessCodes.map(code => {
                       const isExpired = code.expiresAt && code.expiresAt < Date.now();
+                      const displayName = getDisplayName(code);
                       return (
-                        <motion.div variants={popItem} key={code.id} layout exit={{ opacity: 0, scale: 0.8 }} className={`p-5 rounded-2xl border flex flex-col justify-between h-40 transition-all group ${isExpired ? (isDarkMode ? 'bg-black/40 border-white/5 opacity-50 grayscale' : 'bg-slate-100 border-slate-200 opacity-60 grayscale') : (isDarkMode ? 'bg-white/5 border-white/10 hover:border-white/20' : 'bg-white border-slate-200 shadow-sm hover:shadow-md')}`}>
+                        <motion.div key={code.id} layout exit={{ opacity: 0, scale: 0.9 }} transition={animTween} className={`p-4 rounded-2xl border flex flex-col justify-between h-36 transition-colors ${isExpired ? 'bg-slate-50/50 border-slate-200 opacity-60 grayscale' : 'bg-white/60 backdrop-blur-sm border-slate-200 hover:border-orange-300 shadow-sm'}`}>
                           <div className="flex justify-between items-start">
-                            <span className="font-bold tracking-wider font-mono text-lg truncate">{code.id}</span>
-                            <span className={`text-[10px] uppercase tracking-widest px-2.5 py-1 rounded-full font-bold ${code.type === 'permanent' ? 'bg-emerald-500/10 text-emerald-500 border border-emerald-500/20' : 'bg-amber-500/10 text-amber-500 border border-amber-500/20'}`}>
-                              {isExpired ? 'EXPIRED' : code.type}
-                            </span>
+                            <div className="flex flex-col max-w-[70%]">
+                              <div className="flex items-center gap-2">
+                                <span className="font-bold tracking-tight text-[16px] truncate">{displayName}</span>
+                                {!isExpired && (
+                                  <button onClick={() => renameCode(code.id, code.name)} className="text-slate-300 hover:text-orange-500 transition-colors"><Edit3 size={14}/></button>
+                                )}
+                              </div>
+                              {code.name && <span className="text-[10px] font-mono uppercase text-slate-400 mt-0.5 truncate">{code.id}</span>}
+                            </div>
+                            
+                            <div className="flex flex-col items-end gap-2">
+                              <span className={`text-[9px] uppercase tracking-widest px-2 py-1 rounded-full font-bold border ${code.type === 'permanent' ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-amber-50 text-amber-600 border-amber-200'}`}>
+                                {isExpired ? 'EXPIRED' : code.type}
+                              </span>
+                              {!isExpired && (
+                                <button onClick={() => copyToClipboard(code.id)} className="p-1.5 rounded-md bg-white border border-slate-200 text-slate-500 hover:text-orange-500 shadow-sm"><Copy size={12}/></button>
+                              )}
+                            </div>
                           </div>
-                          <div className="flex gap-2 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity mt-auto">
-                            <button onClick={() => toggleBlockStatus(code.id, code.status)} className={`flex-1 py-2.5 rounded-xl flex justify-center items-center text-xs font-bold transition-all border ${code.status === 'active' ? 'bg-orange-500/10 text-orange-500 border-orange-500/30 hover:bg-orange-500/20' : 'bg-emerald-500/10 text-emerald-500 border-emerald-500/30 hover:bg-emerald-500/20'}`}>
-                              {code.status === 'active' ? <Ban size={14} className="mr-1.5"/> : <CheckCircle size={14} className="mr-1.5"/>}
+                          <div className="flex gap-2 mt-auto">
+                            <button onClick={() => toggleBlockStatus(code.id, code.status)} className={`flex-1 py-2 rounded-xl flex justify-center items-center text-[11px] font-bold transition-colors border bg-white shadow-sm ${code.status === 'active' ? 'text-orange-500 border-orange-200 hover:bg-orange-50' : 'text-emerald-600 border-emerald-200 hover:bg-emerald-50'}`}>
                               {code.status === 'active' ? 'BLOCK' : 'UNBLOCK'}
                             </button>
-                            <button onClick={() => deleteCode(code.id)} className="flex-1 py-2.5 rounded-xl flex justify-center items-center text-xs font-bold bg-red-500/10 text-red-500 border border-red-500/30 hover:bg-red-500/20 transition-all">
-                              <Trash2 size={14} className="mr-1.5"/> DELETE
+                            <button onClick={() => deleteCode(code.id)} className="flex-1 py-2 rounded-xl flex justify-center items-center text-[11px] font-bold bg-white border border-red-200 text-red-500 hover:bg-red-50 shadow-sm transition-colors">
+                              DELETE
                             </button>
                           </div>
                         </motion.div>
                       );
                     })}
                   </AnimatePresence>
-                </motion.div>
+                </div>
               </div>
             </motion.div>
           )}
 
           {/* --- TAB: SETTINGS --- */}
           {activeTab === 'settings' && (
-            <motion.div key="settings" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} className={`w-full h-full flex flex-col rounded-3xl overflow-hidden p-8 transition-colors duration-500 ${panelBg}`}>
-              <div className={`mb-8 border-b pb-6 ${isDarkMode ? 'border-white/10' : 'border-slate-200'}`}>
-                <h2 className="text-3xl font-extrabold tracking-wide">System Configuration</h2>
-                <p className="text-gray-400 font-medium mt-1">Manage your administrative footprint.</p>
+            <motion.div key="settings" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="w-full h-full flex flex-col p-4 sm:p-8" style={{ paddingTop: 'calc(1.5rem + env(safe-area-inset-top))' }}>
+              <div className="mb-6 border-b border-slate-200/60 pb-4">
+                <h2 className="text-2xl font-bold tracking-tight">Configuration</h2>
+                <p className="text-sm text-slate-500 mt-1">Manage administrative footprint.</p>
               </div>
 
-              <div className="max-w-2xl space-y-6">
-                {/* Ghost Mode Toggle */}
-                <div className={`border p-6 rounded-2xl flex items-center justify-between shadow-sm transition-colors duration-500 ${isDarkMode ? 'bg-black/20 border-white/10' : 'bg-white border-slate-200'}`}>
-                  <div className="flex gap-5 items-center">
-                    <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-md transition-colors ${ghostMode ? 'bg-amber-500/20 text-amber-500' : (isDarkMode ? 'bg-white/5 text-gray-500' : 'bg-slate-100 text-slate-400')}`}>
-                      <Ghost size={28} />
+              <div className="max-w-xl space-y-4">
+                <div className="border border-slate-200 p-5 rounded-2xl flex items-center justify-between shadow-sm bg-white/60 backdrop-blur-md">
+                  <div className="flex gap-4 items-center">
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center border transition-colors ${ghostMode ? 'bg-amber-50 text-amber-500 border-amber-200' : 'bg-white text-slate-400 border-slate-200'}`}>
+                      <Ghost size={24} />
                     </div>
                     <div>
-                      <h3 className="text-lg font-extrabold">Incognito / Ghost Mode</h3>
-                      <p className="text-sm text-gray-500 mt-1 font-medium">When active, users will not see your "Online" status, last seen timestamp, or typing indicators.</p>
+                      <h3 className="text-[16px] font-bold">Ghost Mode</h3>
+                      <p className="text-[12px] mt-0.5 text-slate-500 max-w-[200px] sm:max-w-none">Hide online status & typing indicators from users.</p>
                     </div>
                   </div>
-                  <button onClick={() => setGhostMode(!ghostMode)} className={`relative w-16 h-8 rounded-full transition-colors duration-300 focus:outline-none shadow-inner ${ghostMode ? 'bg-amber-500' : 'bg-gray-400'}`}>
-                    <motion.div animate={{ x: ghostMode ? 32 : 4 }} transition={{ type: "spring", stiffness: 500, damping: 30 }} className="absolute top-1 left-0 w-6 h-6 bg-white rounded-full shadow-md" />
+                  <button onClick={() => setGhostMode(!ghostMode)} className={`relative w-14 h-7 rounded-full transition-colors duration-300 shadow-inner flex-shrink-0 border border-slate-200 ${ghostMode ? 'bg-amber-400' : 'bg-slate-200'}`}>
+                    <motion.div animate={{ x: ghostMode ? 28 : 2 }} transition={{ type: "spring", stiffness: 500, damping: 30 }} className="absolute top-[1px] left-0 w-6 h-6 bg-white rounded-full shadow-sm" />
+                  </button>
+                </div>
+
+                <div className="border border-slate-200 p-5 rounded-2xl flex items-center justify-between shadow-sm bg-white/60 backdrop-blur-md">
+                  <div className="flex gap-4 items-center">
+                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center border transition-colors ${hideReceipts ? 'bg-amber-50 text-amber-500 border-amber-200' : 'bg-white text-slate-400 border-slate-200'}`}>
+                      <EyeOff size={24} />
+                    </div>
+                    <div>
+                      <h3 className="text-[16px] font-bold">Stealth Receipts</h3>
+                      <p className="text-[12px] mt-0.5 text-slate-500 max-w-[200px] sm:max-w-none">Do not send Read or Delivered ticks to users.</p>
+                    </div>
+                  </div>
+                  <button onClick={() => setHideReceipts(!hideReceipts)} className={`relative w-14 h-7 rounded-full transition-colors duration-300 shadow-inner flex-shrink-0 border border-slate-200 ${hideReceipts ? 'bg-amber-400' : 'bg-slate-200'}`}>
+                    <motion.div animate={{ x: hideReceipts ? 28 : 2 }} transition={{ type: "spring", stiffness: 500, damping: 30 }} className="absolute top-[1px] left-0 w-6 h-6 bg-white rounded-full shadow-sm" />
                   </button>
                 </div>
               </div>
@@ -466,18 +723,17 @@ export default function AdminDashboard() {
           )}
 
         </AnimatePresence>
-      </div>
+      </main>
     </div>
   );
 }
 
-// Sidebar Nav Button Component
-function NavButton({ icon, label, active, onClick, isDarkMode }) {
+function NavButton({ icon, label, active, onClick }) {
   return (
-    <button onClick={onClick} className={`w-full p-3.5 flex flex-col items-center justify-center gap-1.5 rounded-2xl transition-all duration-300 relative group ${active ? (isDarkMode ? 'text-white bg-white/10 shadow-inner' : 'text-blue-600 bg-blue-50 shadow-inner') : (isDarkMode ? 'text-gray-500 hover:text-gray-300 hover:bg-white/5' : 'text-slate-400 hover:text-blue-600 hover:bg-slate-50')}`}>
+    <button onClick={onClick} className={`p-2.5 sm:p-3.5 flex sm:flex-col flex-row sm:w-full items-center justify-center gap-2 sm:gap-1.5 rounded-xl transition-all duration-200 relative group ${active ? 'text-orange-600 bg-orange-50 shadow-sm border border-orange-100' : 'text-slate-500 hover:text-orange-500 hover:bg-white/50 border border-transparent'}`}>
       {icon}
-      <span className="text-[10px] font-extrabold tracking-widest">{label}</span>
-      {active && <motion.div layoutId="activeTab" className="absolute left-0 top-1/4 bottom-1/4 w-1.5 bg-blue-500 rounded-r-full shadow-sm" />}
+      <span className={`text-[10px] font-bold tracking-widest ${active ? 'block' : 'hidden sm:block'}`}>{label}</span>
+      {active && <motion.div layoutId="activeTab" transition={animTween} className="absolute sm:left-0 sm:top-1/4 sm:bottom-1/4 sm:w-1 sm:h-auto sm:rounded-r-full bottom-0 left-1/4 right-1/4 h-1 w-auto rounded-t-full bg-orange-500" />}
     </button>
   );
 }
