@@ -24,41 +24,54 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
   const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   
-  // 🌟 Advanced Features
-  const [isEnhanced, setIsEnhanced] = useState(false); // Studio/Beauty Mode
-  const [facingMode, setFacingMode] = useState('user'); // Camera Swap
+  const [isEnhanced, setIsEnhanced] = useState(false); 
+  const [facingMode, setFacingMode] = useState('user'); 
   const [isFullscreen, setIsFullscreen] = useState(false); 
 
   const myVideoRef = useRef(null);
   const remoteVideoRef = useRef(null);
-  const ambientVideoRef = useRef(null); // Used for background blur glow
+  const ambientVideoRef = useRef(null); 
   const timerRef = useRef(null);
   const containerRef = useRef(null);
 
-  // Advanced Cinematic Studio Filter
   const beautyFilter = isEnhanced 
     ? 'brightness(1.1) contrast(1.05) saturate(1.2) drop-shadow(0px 0px 10px rgba(255,255,255,0.1))' 
     : 'none';
 
-  // --- 1. CORE WEBRTC ENGINE ---
+  // --- 1. CORE WEBRTC ENGINE (MOBILE OPTIMIZED) ---
   useEffect(() => {
+    // 1. Initialize Peer with robust STUN servers for Mobile Networks
     const initPeer = new Peer(`${roomId}-${myRole}`, {
-      config: { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:global.stun.twilio.com:3478' }] }
+      config: { 
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' }, 
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
+        ] 
+      }
     });
+    
     const targetRole = myRole === 'admin' ? 'user' : 'admin';
     const targetId = `${roomId}-${targetRole}`;
 
+    // 2. Get Media (Stripped strict constraints for mobile compatibility)
     const getMedia = async (mode) => {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ 
-          video: { facingMode: mode, width: { ideal: 1280 }, height: { ideal: 720 } }, 
-          audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } 
+          video: { facingMode: mode }, // Removed ideal width/height to prevent mobile crashes
+          audio: { echoCancellation: true, noiseSuppression: true } 
         });
+        
         setMyStream(stream);
-        if (myVideoRef.current) myVideoRef.current.srcObject = stream;
+        
+        // Attach local video safely
+        if (myVideoRef.current) {
+          myVideoRef.current.srcObject = stream;
+        }
         return stream;
       } catch (err) {
-        alert("Camera/Mic access is required to establish a secure tunnel.");
+        console.error("Media Error:", err);
+        alert("Camera/Mic access is required or blocked by your browser.");
         onClose();
         return null;
       }
@@ -68,7 +81,7 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
       if (!stream) return;
       if (!isIncoming) DIAL_TONE.play().catch(()=>{});
 
-      // Answer incoming call
+      // 3. Setup Answer Engine
       initPeer.on('call', (call) => {
         DIAL_TONE.pause();
         call.answer(stream);
@@ -80,30 +93,34 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
         });
       });
 
-      // Dial out
-      if (!isIncoming) {
-        const tryCall = setInterval(() => {
-          const call = initPeer.call(targetId, stream);
-          if (call) {
-            call.on('stream', (incomingStream) => {
+      // 4. Setup Dial Engine (Strictly wait for Peer server connection first)
+      initPeer.on('open', () => {
+        if (!isIncoming) {
+          const tryCall = setInterval(() => {
+            if (isConnected) {
               clearInterval(tryCall);
-              DIAL_TONE.pause();
-              setRemoteStream(incomingStream);
-              if (remoteVideoRef.current) remoteVideoRef.current.srcObject = incomingStream;
-              if (ambientVideoRef.current) ambientVideoRef.current.srcObject = incomingStream;
-              setIsConnected(true);
-            });
-          }
-        }, 1500); // Retry pinging every 1.5s until they pick up
-        
-        initPeer.on('connection', () => clearInterval(tryCall));
-        setTimeout(() => { clearInterval(tryCall); DIAL_TONE.pause(); }, 45000); // 45 sec timeout
-      }
+              return;
+            }
+            const call = initPeer.call(targetId, stream);
+            if (call) {
+              call.on('stream', (incomingStream) => {
+                clearInterval(tryCall);
+                DIAL_TONE.pause();
+                setRemoteStream(incomingStream);
+                if (remoteVideoRef.current) remoteVideoRef.current.srcObject = incomingStream;
+                if (ambientVideoRef.current) ambientVideoRef.current.srcObject = incomingStream;
+                setIsConnected(true);
+              });
+            }
+          }, 2000); // Ping every 2 seconds
+          
+          setTimeout(() => { clearInterval(tryCall); DIAL_TONE.pause(); }, 45000); 
+        }
+      });
     });
 
     setPeer(initPeer);
 
-    // Flawless Garbage Collection
     return () => {
       DIAL_TONE.pause();
       initPeer.destroy();
@@ -137,24 +154,20 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
     }
   };
 
-  // 🔄 Seamless Camera Swap
   const swapCamera = async () => {
-    if (isScreenSharing) return; // Disable swap if sharing screen
+    if (isScreenSharing) return; 
     if (myStream) myStream.getVideoTracks().forEach(track => track.stop());
     const newMode = facingMode === 'user' ? 'environment' : 'user';
     setFacingMode(newMode);
     
     try {
       const newStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: newMode }, audio: !isMuted });
-      
-      // Keep existing audio track, just replace video
       const audioTrack = myStream.getAudioTracks()[0];
       if (audioTrack) newStream.addTrack(audioTrack);
       
       setMyStream(newStream);
       if (myVideoRef.current) myVideoRef.current.srcObject = newStream;
       
-      // Hot-swap track on active Peer connection
       if (peer) {
         Object.values(peer.connections).forEach(connArray => {
           connArray.forEach(conn => {
@@ -166,28 +179,17 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
     } catch (err) { console.error("Camera swap failed", err); }
   };
 
-  // 💻 Screen Share Engine
   const toggleScreenShare = async () => {
     if (isScreenSharing) {
-      // Revert to camera
       setIsScreenSharing(false);
-      swapCamera(); // Triggers a re-fetch of the camera
+      swapCamera(); 
       return;
     }
-
     try {
       const screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
       const screenTrack = screenStream.getVideoTracks()[0];
-      
-      // If user clicks "Stop Sharing" on the browser's native banner
-      screenTrack.onended = () => {
-        setIsScreenSharing(false);
-        swapCamera();
-      };
-
+      screenTrack.onended = () => { setIsScreenSharing(false); swapCamera(); };
       if (myVideoRef.current) myVideoRef.current.srcObject = screenStream;
-      
-      // Hot-swap track to peer
       if (peer) {
         Object.values(peer.connections).forEach(connArray => {
           connArray.forEach(conn => {
@@ -197,20 +199,14 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
         });
       }
       setIsScreenSharing(true);
-    } catch (err) {
-      console.log("Screen share cancelled or failed.");
-    }
+    } catch (err) { console.log("Screen share cancelled."); }
   };
 
-  // 🖼️ Native OS Picture-in-Picture
   const requestPiP = async () => {
     if (remoteVideoRef.current && document.pictureInPictureEnabled) {
       try {
-        if (document.pictureInPictureElement) {
-          await document.exitPictureInPicture();
-        } else {
-          await remoteVideoRef.current.requestPictureInPicture();
-        }
+        if (document.pictureInPictureElement) await document.exitPictureInPicture();
+        else await remoteVideoRef.current.requestPictureInPicture();
       } catch (err) { console.error("PiP failed", err); }
     }
   };
@@ -224,23 +220,23 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
   return (
     <div className="fixed inset-0 z-[500] bg-black/90 backdrop-blur-3xl flex items-center justify-center font-sans overflow-hidden select-none" ref={containerRef}>
       
-      {/* 📱 MAIN CINEMATIC FRAME */}
       <motion.div 
         layout
         className={`relative bg-[#050505] overflow-hidden shadow-[0_0_80px_rgba(0,0,0,0.8)] transition-all duration-500 ease-[cubic-bezier(0.23,1,0.32,1)] ${isFullscreen ? 'w-full h-full rounded-none' : 'w-full max-w-[420px] h-[100dvh] max-h-[850px] sm:h-[85vh] sm:rounded-[48px] border-[8px] border-[#1a1a1a] ring-1 ring-white/10'}`}
       >
         
-        {/* 🌌 Ambient Blurred Background (Takes the remote stream and heavily blurs it) */}
+        {/* Ambient Blurred Background */}
         <video 
           ref={ambientVideoRef} 
           autoPlay 
           playsInline 
           muted 
+          onLoadedMetadata={(e) => e.target.play()}
           className={`absolute inset-0 w-full h-full object-cover blur-[100px] opacity-40 scale-125 transition-opacity duration-1000 ${isConnected ? 'opacity-50' : 'opacity-0'}`} 
         />
 
-        {/* 🔝 HEADER BAR */}
-        <header className="absolute top-0 w-full h-28 bg-gradient-to-b from-black/90 via-black/50 to-transparent z-30 flex items-start justify-between px-6 pt-6 sm:pt-8 transition-opacity">
+        {/* HEADER BAR */}
+        <header className="absolute top-0 w-full h-28 bg-gradient-to-b from-black/90 via-black/50 to-transparent z-30 flex items-start justify-between px-6 pt-6 sm:pt-8 pointer-events-none">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/10 shadow-lg text-emerald-400">
               <ShieldCheck size={20} />
@@ -252,7 +248,7 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
               </span>
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex gap-2 pointer-events-auto">
             {document.pictureInPictureEnabled && (
               <button onClick={requestPiP} className="text-white/70 hover:text-white p-2.5 bg-black/40 hover:bg-black/60 rounded-full backdrop-blur-md transition-colors">
                 <PictureInPicture size={18}/>
@@ -264,12 +260,13 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
           </div>
         </header>
 
-        {/* 🎬 REMOTE VIDEO STAGE */}
+        {/* REMOTE VIDEO STAGE */}
         <div className="absolute inset-0 flex items-center justify-center z-10">
           <video 
             ref={remoteVideoRef} 
             autoPlay 
             playsInline 
+            onLoadedMetadata={(e) => e.target.play()} // 🔥 iOS SAFARI FIX
             className={`w-full h-full object-cover transition-opacity duration-700 ${isConnected ? 'opacity-100' : 'opacity-0'}`} 
           />
           
@@ -281,7 +278,6 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
                 <div className="absolute w-48 h-48 border-[1.5px] border-emerald-500/20 rounded-full animate-[ping_2.5s_cubic-bezier(0,0,0.2,1)_infinite]" style={{ animationDelay: '0.5s' }}></div>
                 <div className="absolute w-64 h-64 border-[1.5px] border-emerald-500/5 rounded-full animate-[ping_2.5s_cubic-bezier(0,0,0.2,1)_infinite]" style={{ animationDelay: '1s' }}></div>
                 
-                {/* Glowing Avatar Placeholder */}
                 <div className="w-24 h-24 bg-gradient-to-br from-zinc-800 to-black border-2 border-emerald-500/50 rounded-full flex items-center justify-center shadow-[0_0_40px_rgba(16,185,129,0.3)] text-emerald-400 z-10">
                   <Loader2 className="animate-spin" size={36} strokeWidth={1.5} />
                 </div>
@@ -291,7 +287,7 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
           )}
         </div>
 
-        {/* 📱 LOCAL VIDEO (MAGNETIC DRAGGABLE PiP) */}
+        {/* LOCAL VIDEO (MAGNETIC DRAGGABLE PiP) */}
         <motion.div 
           drag 
           dragConstraints={containerRef}
@@ -305,6 +301,7 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
             autoPlay 
             playsInline 
             muted 
+            onLoadedMetadata={(e) => e.target.play()} // 🔥 iOS SAFARI FIX
             className="w-full h-full object-cover transition-all duration-300" 
             style={{ 
               filter: beautyFilter, 
@@ -312,10 +309,8 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
             }} 
           />
           
-          {/* Mute Indicator Ring */}
           {isMuted && <div className="absolute inset-0 border-2 border-red-500 rounded-2xl pointer-events-none"></div>}
 
-          {/* Camera Off State */}
           <AnimatePresence>
             {isVideoOff && (
               <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 bg-[#1a1a1a]/95 backdrop-blur-xl flex flex-col items-center justify-center text-white/50 border border-white/5">
@@ -326,10 +321,9 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
           </AnimatePresence>
         </motion.div>
 
-        {/* 🎛️ FLOATING SIDE TOOLBAR (Advanced Features) */}
+        {/* 🎛️ FLOATING SIDE TOOLBAR */}
         <div className="absolute top-1/2 -translate-y-1/2 right-4 sm:right-6 flex flex-col gap-3 z-30 opacity-0 hover:opacity-100 sm:opacity-100 transition-opacity duration-300">
           
-          {/* Studio Beauty Mode */}
           <div className="relative group">
             <button onClick={() => setIsEnhanced(!isEnhanced)} className={`p-3 rounded-2xl backdrop-blur-xl border border-white/10 shadow-xl transition-all duration-300 ${isEnhanced ? 'bg-pink-500/20 text-pink-400 border-pink-500/50 shadow-[0_0_20px_rgba(236,72,153,0.3)]' : 'bg-black/60 text-white/70 hover:bg-black/80 hover:text-white'}`}>
               <Sparkles size={20} className={isEnhanced ? "animate-pulse" : ""} />
@@ -337,7 +331,6 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
             <span className="absolute right-14 top-1/2 -translate-y-1/2 px-3 py-1.5 bg-black/90 backdrop-blur-md text-white text-[10px] font-bold tracking-widest uppercase rounded-lg opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none border border-white/10">Studio Mode</span>
           </div>
 
-          {/* Screen Share */}
           {navigator.mediaDevices?.getDisplayMedia && (
             <div className="relative group">
               <button onClick={toggleScreenShare} className={`p-3 rounded-2xl backdrop-blur-xl border border-white/10 shadow-xl transition-all duration-300 ${isScreenSharing ? 'bg-blue-500/20 text-blue-400 border-blue-500/50 shadow-[0_0_20px_rgba(59,130,246,0.3)]' : 'bg-black/60 text-white/70 hover:bg-black/80 hover:text-white'}`}>
@@ -347,7 +340,6 @@ export default function NativeVideoCall({ chatId, myRole, roomId, isIncoming, on
             </div>
           )}
 
-          {/* Camera Swap */}
           {!isScreenSharing && (
             <div className="relative group">
               <button onClick={swapCamera} className="p-3 rounded-2xl bg-black/60 backdrop-blur-xl border border-white/10 shadow-xl text-white/70 hover:bg-black/80 hover:text-white transition-all duration-300 active:scale-95">
