@@ -4,20 +4,16 @@ import { Send, LogOut, ShieldCheck, Lock, WifiOff, ChevronDown, CheckCheck, Chec
 import { db } from '../services/firebase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import NativeVideoCall from '../components/NativeVideoCall'; // 🚀 NATIVE VIDEO ENGINE
+import NativeVideoCall from '../components/NativeVideoCall'; 
 import Login from './Login';
 
-// ==========================================
-// 🚀 API CONFIGURATION
 const IMGBB_API_KEY = '250588b8b03b100c08b3df82baaa28a4';
 const GEMINI_API_KEY = 'AIzaSyCzWUVmeJ1NE_8D_JmQQrFQv4elA1zS2iA';
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
-// ==========================================
 
 const animTween = { type: "tween", ease: "easeOut", duration: 0.25 };
 const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: animTween } };
 
-// 🎵 AUDIO TONES
 const RING_TONE = new Audio('https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg');
 RING_TONE.loop = true;
 
@@ -27,7 +23,6 @@ export default function UserChat() {
   const [newMessage, setNewMessage] = useState("");
   const [isAdminTyping, setIsAdminTyping] = useState(false);
   
-  // File & AI State
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [aiReplies, setAiReplies] = useState([]);
@@ -38,20 +33,17 @@ export default function UserChat() {
   const [selectedImage, setSelectedImage] = useState(null);
   const [replyingToId, setReplyingToId] = useState(null);
   
-  // App State
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [privacyMode, setPrivacyMode] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [connectionError, setConnectionError] = useState("");
 
-  // User Profile State
   const [showProfile, setShowProfile] = useState(false);
   const [userProfile, setUserProfile] = useState({ name: "", bio: "", avatar: "" });
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   
-  // 🎥 SIGNALING & NATIVE VIDEO STATE
-  const [videoCallState, setVideoCallState] = useState(null); // { roomId, isIncoming }
+  const [videoCallState, setVideoCallState] = useState(null); 
 
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -60,9 +52,7 @@ export default function UserChat() {
   const avatarInputRef = useRef(null);
   const previousMessageCount = useRef(0);
   const ignoreBlurRef = useRef(false); 
-  const audioRef = useRef(typeof Audio !== "undefined" ? new Audio('/pop.mp3') : null);
 
-  // --- 1. GLOBAL EVENT LISTENERS ---
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
@@ -83,12 +73,10 @@ export default function UserChat() {
     };
   }, [selectedImage]);
 
-  // --- 2. FETCH MESSAGES & PROFILE ---
   useEffect(() => {
     if (!chatId) return;
     setConnectionError("");
     
-    // Fetch Profile Data
     const fetchProfile = async () => {
       const docSnap = await getDoc(doc(db, 'chats', chatId));
       if (docSnap.exists() && docSnap.data().userProfile) setUserProfile(docSnap.data().userProfile);
@@ -101,7 +89,7 @@ export default function UserChat() {
       setMessages(fetchedMessages);
       if (previousMessageCount.current !== 0 && fetchedMessages.length > previousMessageCount.current) {
         const lastMsg = fetchedMessages[fetchedMessages.length - 1];
-        if (lastMsg?.sender === 'admin') { audioRef.current?.play().catch(() => {}); setShowAIReplies(false); }
+        if (lastMsg?.sender === 'admin') { setShowAIReplies(false); }
       }
       previousMessageCount.current = fetchedMessages.length;
       setTimeout(() => scrollToBottom('auto'), 100);
@@ -112,7 +100,6 @@ export default function UserChat() {
         const data = docSnap.data();
         setIsAdminTyping(data.adminTyping || false);
 
-        // 🚨 WEBRTC SIGNALING: Listen for Call States
         if (data.activeCall) {
           if (data.activeCall.status === 'ringing' && data.activeCall.caller === 'admin') {
             RING_TONE.play().catch(()=>{});
@@ -131,7 +118,6 @@ export default function UserChat() {
     return () => { unsubscribeMessages(); unsubscribeDoc(); previousMessageCount.current = 0; RING_TONE.pause(); };
   }, [chatId]);
 
-  // --- 3. RECEIPTS & PRESENCE ---
   useEffect(() => {
     if (!chatId) return;
     const hasFocus = document.hasFocus();
@@ -164,13 +150,11 @@ export default function UserChat() {
     return () => { setOffline(); window.removeEventListener('visibilitychange', handleVisibility); window.removeEventListener('beforeunload', setOffline); };
   }, [chatId]);
 
-  // --- UI SCROLL HELPERS ---
-  const scrollToBottom = (behavior = 'smooth') => { if (chatContainerRef.current) chatContainerRef.current.scrollTo({ top: chatContainerRef.current.scrollHeight, behavior }); };
+  const scrollToBottom = (behavior = 'smooth') => { if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior }); };
   const handleScroll = (e) => setShowScrollButton(e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight > 100);
   const handleInputFocus = () => { if (chatId) setDoc(doc(db, 'chats', chatId), { userTyping: true }, { merge: true }).catch(()=>{}); };
   const handleInputBlur = () => { if (chatId) setDoc(doc(db, 'chats', chatId), { userTyping: false }, { merge: true }).catch(()=>{}); };
 
-  // --- 🎥 VIDEO CALL HANDLERS ---
   const initiateCall = async () => {
     if (!chatId) return;
     const roomId = `vault-${Date.now()}`;
@@ -197,7 +181,6 @@ export default function UserChat() {
     setVideoCallState(null);
   };
 
-  // --- MESSAGE ENGINE ---
   const generateAIQuickReplies = async () => {
     if (showAIReplies && aiReplies.length > 0) { setShowAIReplies(false); return; }
     if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('PASTE')) return alert("Missing API Key");
@@ -263,7 +246,6 @@ export default function UserChat() {
     } catch (err) { setConnectionError("Delivery Failed: Session is Blocked or Expired."); } finally { setIsUploading(false); }
   };
 
-  // --- PROFILE LOGIC ---
   const handleSaveProfile = async () => {
     setIsSavingProfile(true);
     try {
@@ -315,7 +297,7 @@ export default function UserChat() {
   if (!chatId) return <Login onLogin={setChatId} />;
 
   return (
-    // ✅ BUG FIX: min-h-0 and min-w-0 prevents layout exploding
+    // 🔥 TITANIUM FLEXBOX: fixed inset-0, flex overflow-hidden guarantees no stretching
     <div className="fixed inset-0 w-full flex flex-col bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] overflow-hidden font-sans text-[#4A3C31] min-h-0 min-w-0">
       
       <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
@@ -368,7 +350,6 @@ export default function UserChat() {
         )}
       </AnimatePresence>
 
-      {/* 📞 INCOMING CALL OVERLAY */}
       <AnimatePresence>
         {videoCallState?.isIncoming && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[600] bg-black/80 backdrop-blur-2xl flex flex-col items-center justify-center text-white">
@@ -385,7 +366,6 @@ export default function UserChat() {
         )}
       </AnimatePresence>
 
-      {/* 🎥 PEER.JS NATIVE VIDEO OVERLAY */}
       <AnimatePresence>
         {videoCallState && !videoCallState.isIncoming && (
           <NativeVideoCall 
@@ -400,7 +380,8 @@ export default function UserChat() {
 
       <AnimatePresence>
         {!isLoggingOut && (
-          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={animTween} className="flex flex-col w-full h-full relative z-10 min-h-0 min-w-0">
+          // 🔥 TITANIUM FLEXBOX: flex-1 flex overflow-hidden min-h-0 strictly locks this layer
+          <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={animTween} className="flex-1 flex flex-col w-full relative z-10 min-h-0 min-w-0 overflow-hidden">
             
             {isOffline && <div className="absolute inset-0 bg-[#F9F6F0]/90 z-[60] flex flex-col items-center justify-center backdrop-blur-md"><WifiOff size={48} className="text-[#8C7462] mb-4 animate-pulse" /><h2 className="text-xl font-bold text-[#3A2D23]">Connection Lost</h2></div>}
             {privacyMode && !isOffline && !selectedImage && <div className="absolute inset-0 bg-[#F9F6F0]/95 z-[55] flex flex-col items-center justify-center backdrop-blur-xl"><Lock size={48} className="text-[#8C7462] mb-4" /><h2 className="text-xl font-bold text-[#3A2D23]">Session Locked</h2></div>}
@@ -423,6 +404,7 @@ export default function UserChat() {
               </div>
             </header>
 
+            {/* 🔥 TITANIUM FLEXBOX: flex-1 min-h-0 strictly limits scrolling to this specific block */}
             <main ref={chatContainerRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-8 flex flex-col items-center z-10 custom-scrollbar relative">
               <div className="w-full max-w-4xl flex flex-col gap-4 pb-2">
                 
@@ -445,14 +427,15 @@ export default function UserChat() {
                           </div>
                         )}
 
-                        <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border ${isUser ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
+                        {/* 🔥 TITANIUM FLEXBOX: break-words overflow-hidden added */}
+                        <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border overflow-hidden break-words ${isUser ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
                           {msg.isImage ? (
                             <div className="relative group/img cursor-zoom-in rounded-lg overflow-hidden mb-1" onClick={() => setSelectedImage(msg.text)}>
                               <img src={msg.text} alt="Attachment" className="w-full max-w-[240px] sm:max-w-[320px] object-cover transition-transform duration-300 group-hover/img:scale-105" />
                               <div className="absolute inset-0 bg-[#3A2D23]/0 group-hover/img:bg-[#3A2D23]/10 transition-colors flex items-center justify-center"><Maximize className="text-white opacity-0 group-hover/img:opacity-100" size={24} /></div>
                             </div>
                           ) : (
-                            <p className="whitespace-pre-wrap break-words text-[15px] sm:text-[16px] leading-relaxed">{msg.text}</p>
+                            <p className="whitespace-pre-wrap break-words leading-relaxed text-[15px] sm:text-[16px]">{msg.text}</p>
                           )}
                           <div className={`text-[10px] font-medium mt-1.5 flex items-center gap-0.5 ${isUser ? 'justify-end text-[#C1B2A6]' : 'justify-start text-[#9E8E81]'}`}>
                             {msg.isEdited && isUser && <span className="italic mr-1">(edited)</span>}
@@ -489,12 +472,13 @@ export default function UserChat() {
               )}
             </AnimatePresence>
 
+            {/* 🔥 TITANIUM FLEXBOX: flex-none shrink-0 guarantees footer never gets squished */}
             <footer className="flex-none shrink-0 bg-[#F9F6F0]/80 backdrop-blur-xl border-t border-[#C1B2A6]/50 px-3 sm:px-8 py-3 z-20 w-full flex flex-col items-center shadow-[0_-10px_30px_rgba(90,70,50,0.03)]" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
               <div className="w-full max-w-4xl flex flex-col gap-2 relative">
                 
                 <AnimatePresence>
                   {connectionError && (
-                    <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center gap-2 bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-xl text-xs font-bold mb-1"><AlertCircle size={14} /> {connectionError}</motion.div>
+                    <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center gap-2 bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-xl text-xs font-bold shadow-sm mb-1"><AlertCircle size={14} /> {connectionError}</motion.div>
                   )}
                   {replyingToId && (
                     <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center justify-between bg-[#E8E1D5] border border-[#C1B2A6]/50 px-4 py-2 rounded-xl text-xs font-bold text-[#5A4535] shadow-sm mb-1">

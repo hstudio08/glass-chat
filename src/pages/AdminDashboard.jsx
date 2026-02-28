@@ -19,7 +19,6 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const animTween = { type: "tween", ease: "easeOut", duration: 0.25 };
 const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: animTween } };
 
-// 🎵 AUDIO TONES
 const RING_TONE = new Audio('https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg');
 RING_TONE.loop = true;
 
@@ -31,7 +30,6 @@ export default function AdminDashboard() {
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   
-  // AI & Image State
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [aiReplies, setAiReplies] = useState([]);
   const [showAIReplies, setShowAIReplies] = useState(false);
@@ -42,7 +40,6 @@ export default function AdminDashboard() {
   const [selectedImage, setSelectedImage] = useState(null);
   const ignoreBlurRef = useRef(false);
   
-  // Database & Feature State
   const [accessCodes, setAccessCodes] = useState([]);
   const [accessRequests, setAccessRequests] = useState([]); 
   const [activeChatId, setActiveChatId] = useState(null);
@@ -59,8 +56,7 @@ export default function AdminDashboard() {
   const [newCodeName, setNewCodeName] = useState("");
   const [expiryHours, setExpiryHours] = useState("0"); 
   
-  // 🎥 SIGNALING & NATIVE VIDEO STATE
-  const [videoCallState, setVideoCallState] = useState(null); // { roomId, isIncoming }
+  const [videoCallState, setVideoCallState] = useState(null);
 
   const chatContainerRef = useRef(null);
   const textareaRef = useRef(null);
@@ -70,7 +66,6 @@ export default function AdminDashboard() {
   const audioRef = useRef(typeof Audio !== "undefined" ? new Audio('/pop.mp3') : null);
   const isWindowFocused = useRef(true);
 
-  // --- 1. AUTH & FOCUS LISTENERS ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user && user.email === ADMIN_EMAIL) setAdminUser(user); else setAdminUser(null);
@@ -92,7 +87,6 @@ export default function AdminDashboard() {
     return () => { window.removeEventListener('focus', handleFocus); window.removeEventListener('blur', handleBlur); window.removeEventListener('keyup', handleKeyDown); };
   }, [selectedImage]);
 
-  // --- 2. GLOBAL DATA FETCHING ---
   useEffect(() => {
     if (!adminUser) return;
     const unsubCodes = onSnapshot(query(collection(db, 'access_codes')), (snapshot) => setAccessCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
@@ -100,7 +94,6 @@ export default function AdminDashboard() {
     return () => { unsubCodes(); unsubReqs(); };
   }, [adminUser]);
 
-  // --- 3. CHAT & SIGNALING ENGINE ---
   useEffect(() => {
     setShowAIReplies(false); setAiReplies([]); setPendingImage(null); setPreviewUrl(null); setReplyingToId(null); setConnectionError("");
     if (!activeChatId) return;
@@ -125,7 +118,6 @@ export default function AdminDashboard() {
         const data = docSnap.data();
         setActiveChatDoc(data);
 
-        // 🚨 WEBRTC SIGNALING: Listen for Call States
         if (data.activeCall) {
           if (data.activeCall.status === 'ringing' && data.activeCall.caller === 'user') {
             RING_TONE.play().catch(()=>{});
@@ -143,7 +135,6 @@ export default function AdminDashboard() {
     return () => { unsubscribeMessages(); unsubscribeDoc(); previousMessageCount.current = 0; RING_TONE.pause(); };
   }, [activeChatId]);
 
-  // --- 4. PRESENCE & RECEIPTS ENGINE ---
   useEffect(() => {
     if (!activeChatId) return;
     const setOnlineStatus = async () => setDoc(doc(db, 'chats', activeChatId), { adminOnline: !ghostMode, adminTyping: false }, { merge: true }).catch(()=>{});
@@ -171,13 +162,11 @@ export default function AdminDashboard() {
     return () => window.removeEventListener('focus', handleFocus);
   }, [messages, activeChatId, hideReceipts]);
 
-  // --- UI SCROLL HELPERS ---
   const scrollToBottom = (behavior = 'smooth') => {
     if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior });
   };
   const handleScroll = (e) => setShowScrollButton(e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight > 100);
 
-  // --- 🎥 VIDEO CALL HANDLERS ---
   const initiateCall = async () => {
     if (!activeChatId || !activeChatDoc) return;
     if (!activeChatDoc.userOnline) { alert("User is offline. Call cannot be delivered."); return; }
@@ -205,7 +194,6 @@ export default function AdminDashboard() {
     setVideoCallState(null);
   };
 
-  // --- REQUEST & ID HANDLERS ---
   const handleApproveRequest = async (request) => {
     const generatedId = `VIP-${Math.floor(1000 + Math.random() * 9000)}`;
     const customId = window.prompt(`Assign an Access ID for ${request.name}:`, generatedId);
@@ -266,7 +254,6 @@ export default function AdminDashboard() {
     if (activeChatId === id && newStatus === "blocked") { setActiveChatId(null); setShowMobileChat(false); }
   };
 
-  // --- MESSAGE HANDLERS ---
   const generateAIQuickReplies = async () => {
     if (showAIReplies && aiReplies.length > 0) { setShowAIReplies(false); return; }
     if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('PASTE')) return alert("Missing API Key");
@@ -337,7 +324,7 @@ export default function AdminDashboard() {
         await addDoc(collection(db, 'chats', activeChatId, 'messages'), { text: currentText, isImage: false, sender: "admin", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
       }
       scrollToBottom('auto');
-    } catch (err) { setConnectionError("Delivery Failed."); } finally { setIsUploading(false); }
+    } catch (err) { alert("Delivery Failed."); } finally { setIsUploading(false); }
   };
 
   const handleTyping = (e) => {
@@ -383,7 +370,7 @@ export default function AdminDashboard() {
 
   if (!adminUser) {
     return (
-      <div className="flex h-[100dvh] w-full items-center justify-center p-4 bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] relative overflow-hidden font-sans text-[#4A3C31]">
+      <div className="fixed inset-0 w-full flex items-center justify-center p-4 bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] overflow-hidden font-sans text-[#4A3C31]">
         <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
           <div className="absolute top-[-10%] left-[-10%] w-[60vw] h-[60vw] rounded-full bg-[#C1B2A6] mix-blend-multiply blur-[100px]" />
           <div className="absolute bottom-[-10%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-[#E8E1D5] mix-blend-multiply blur-[100px]" />
@@ -399,6 +386,7 @@ export default function AdminDashboard() {
   }
 
   return (
+    // 🔥 TITANIUM FLEXBOX: fixed inset-0, flex overflow-hidden guarantees no stretching
     <div className="fixed inset-0 flex flex-col sm:flex-row bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] overflow-hidden font-sans text-[#4A3C31] min-h-0 min-w-0">
       
       <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
@@ -406,7 +394,6 @@ export default function AdminDashboard() {
         <div className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#E8E1D5] mix-blend-multiply blur-[100px]" />
       </div>
 
-      {/* 🖼️ IMAGE LIGHTBOX */}
       <AnimatePresence>
         {selectedImage && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="fixed inset-0 z-[100] bg-[#3A2D23]/95 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setSelectedImage(null)}>
@@ -416,7 +403,6 @@ export default function AdminDashboard() {
         )}
       </AnimatePresence>
 
-      {/* 📞 INCOMING CALL OVERLAY */}
       <AnimatePresence>
         {videoCallState?.isIncoming && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[600] bg-black/80 backdrop-blur-2xl flex flex-col items-center justify-center text-white">
@@ -433,20 +419,13 @@ export default function AdminDashboard() {
         )}
       </AnimatePresence>
 
-      {/* 🎥 ACTIVE NATIVE VIDEO CALL */}
       <AnimatePresence>
         {videoCallState && !videoCallState.isIncoming && (
-          <NativeVideoCall 
-            chatId={activeChatId} 
-            myRole="admin" 
-            roomId={videoCallState.roomId}
-            isIncoming={false}
-            onClose={endCallFirebase} 
-          />
+          <NativeVideoCall chatId={activeChatId} myRole="admin" roomId={videoCallState.roomId} isIncoming={false} onClose={endCallFirebase} />
         )}
       </AnimatePresence>
 
-      <nav className="order-last sm:order-first flex-none h-[calc(60px+env(safe-area-inset-bottom))] sm:h-full sm:w-[88px] bg-[#F9F6F0]/70 backdrop-blur-xl border-t sm:border-t-0 sm:border-r border-[#C1B2A6]/50 flex sm:flex-col items-center justify-around sm:justify-start sm:py-6 z-40 pb-[env(safe-area-inset-bottom)] sm:pb-6 shadow-[0_0_30px_rgba(90,70,50,0.05)]">
+      <nav className="flex-none shrink-0 order-last sm:order-first h-[calc(60px+env(safe-area-inset-bottom))] sm:h-full sm:w-[88px] bg-[#F9F6F0]/70 backdrop-blur-xl border-t sm:border-t-0 sm:border-r border-[#C1B2A6]/50 flex sm:flex-col items-center justify-around sm:justify-start sm:py-6 z-40 pb-[env(safe-area-bottom)] sm:pb-6 shadow-[0_0_30px_rgba(90,70,50,0.05)]">
         <div className="hidden sm:flex w-12 h-12 bg-gradient-to-br from-[#8C7462] to-[#5A4535] rounded-xl shadow-md items-center justify-center mb-6 text-[#F9F6F0]">
           <Activity size={24} />
         </div>
@@ -470,13 +449,13 @@ export default function AdminDashboard() {
         </div>
       </nav>
 
+      {/* 🔥 TITANIUM FLEXBOX: flex-1 flex min-w-0 min-h-0 guarantees this never breaks past the screen */}
       <main className="flex-1 flex min-w-0 min-h-0 overflow-hidden z-10 relative">
         <AnimatePresence mode="wait">
           
-          {/* --- TAB: CHATS --- */}
           {activeTab === 'chats' && (
-            <motion.div key="chats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="flex w-full h-full min-h-0 min-w-0">
-              <div className={`w-full sm:w-[320px] shrink-0 flex flex-col h-full bg-[#F9F6F0]/50 backdrop-blur-md border-r border-[#C1B2A6]/50 ${showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
+            <motion.div key="chats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="flex-1 flex min-h-0 min-w-0 w-full overflow-hidden">
+              <div className={`w-full sm:w-[320px] shrink-0 flex flex-col h-full bg-[#F9F6F0]/50 backdrop-blur-md border-r border-[#C1B2A6]/50 overflow-hidden ${showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
                 <div className="p-5 border-b border-[#C1B2A6]/50 flex justify-between items-center shrink-0" style={{ paddingTop: 'calc(1.25rem + env(safe-area-inset-top))' }}>
                   <h2 className="font-serif font-bold text-xl text-[#3A2D23]">Sessions</h2>
                   <div className="px-2.5 py-1 bg-[#E8E1D5] text-[#5A4535] rounded-full text-xs font-bold border border-[#C1B2A6]/30">{accessCodes.filter(c=>c.status==='active').length}</div>
@@ -498,7 +477,7 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              <div className={`flex-1 min-w-0 flex flex-col h-full relative ${!showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
+              <div className={`flex-1 min-w-0 flex flex-col relative overflow-hidden ${!showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
                 {activeChatId ? (
                   <>
                     <header className="flex-none shrink-0 bg-[#F9F6F0]/70 backdrop-blur-xl border-b border-[#C1B2A6]/50 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-20 shadow-[0_10px_30px_rgba(90,70,50,0.03)]" style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}>
@@ -515,15 +494,13 @@ export default function AdminDashboard() {
                       </div>
                       <div className="flex items-center gap-2">
                         {ghostMode && <div className="hidden sm:flex items-center gap-1.5 bg-[#E8E1D5] border border-[#C1B2A6] px-2.5 py-1 rounded-md text-[#5A4535]"><Ghost size={12} /> <span className="text-[10px] font-bold uppercase tracking-widest">Ghost</span></div>}
-                        
-                        {/* 📞 CALL BUTTON */}
                         <button onClick={initiateCall} title="Start Secure Video Call" className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:text-blue-600 shadow-sm transition-colors"><Video size={18} /></button>
-                        
                         <button onClick={exportChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-[#5A4535] shadow-sm transition-colors"><Download size={18} /></button>
                         <button onClick={clearEntireChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-red-600 shadow-sm transition-colors"><Eraser size={18} /></button>
                       </div>
                     </header>
                     
+                    {/* 🔥 TITANIUM FLEXBOX: flex-1 min-h-0 strictly limits scrolling to this specific main block */}
                     <main ref={chatContainerRef} onScroll={handleScroll} className="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 flex flex-col items-center z-10 custom-scrollbar relative">
                       <div className="w-full max-w-4xl flex flex-col gap-4 pb-2">
                         <AnimatePresence mode="popLayout">
@@ -538,17 +515,17 @@ export default function AdminDashboard() {
                                   </div>
                                 )}
 
-                                <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border ${isAdmin ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
+                                {/* 🔥 TITANIUM FLEXBOX: break-words overflow-hidden prevents text blowing out horizontal layout */}
+                                <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border overflow-hidden break-words ${isAdmin ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
                                   {msg.isImage ? (
                                     <div className="relative group/img cursor-zoom-in rounded-lg overflow-hidden mb-1" onClick={() => setSelectedImage(msg.text)}>
                                       <img src={msg.text} alt="Attachment" className="w-full max-w-[240px] sm:max-w-[320px] object-cover transition-transform duration-300 group-hover/img:scale-105" />
                                       <div className="absolute inset-0 bg-[#3A2D23]/0 group-hover/img:bg-[#3A2D23]/10 transition-colors flex items-center justify-center"><Maximize className="text-white opacity-0 group-hover/img:opacity-100" size={24} /></div>
                                     </div>
                                   ) : (
-                                    <p className="whitespace-pre-wrap break-words text-[15px] sm:text-[16px] leading-relaxed">{msg.text}</p>
+                                    <p className="whitespace-pre-wrap break-words leading-relaxed text-[15px] sm:text-[16px]">{msg.text}</p>
                                   )}
                                   <div className={`text-[10px] font-medium mt-1.5 flex items-center gap-0.5 ${isAdmin ? 'justify-end text-[#C1B2A6]' : 'justify-start text-[#9E8E81]'}`}>
-                                    {/* SILENT EDIT FOR ADMIN */}
                                     {msg.isEdited && !isAdmin && <span className="italic mr-1">(edited)</span>}
                                     {formatTime(msg.timestamp)}
                                     {isAdmin && !hideReceipts && <MessageStatusIcon msg={msg} />}
@@ -585,6 +562,7 @@ export default function AdminDashboard() {
                       )}
                     </AnimatePresence>
 
+                    {/* 🔥 TITANIUM FLEXBOX: flex-none shrink-0 guarantees footer never gets squished */}
                     <footer className="flex-none shrink-0 bg-[#F9F6F0]/80 backdrop-blur-xl border-t border-[#C1B2A6]/50 px-3 sm:px-6 py-3 z-20 flex flex-col items-center shadow-[0_-10px_30px_rgba(90,70,50,0.03)]" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
                       <div className="w-full max-w-4xl flex flex-col gap-2 relative">
                         
