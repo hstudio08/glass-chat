@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
-import { Send, LogOut, ShieldCheck, Lock, WifiOff, ChevronDown, CheckCheck, Check, Clock, Image as ImageIcon, Loader2, Maximize, X, Sparkles, AlertCircle, UserCircle, Reply, Video } from 'lucide-react';
+import { Send, LogOut, ShieldCheck, Lock, WifiOff, ChevronDown, CheckCheck, Check, Clock, Image as ImageIcon, Loader2, Maximize, X, Sparkles, AlertCircle, UserCircle, Reply, Video, PhoneIncoming, PhoneOff } from 'lucide-react';
 import { db } from '../services/firebase';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from '@google/generative-ai';
@@ -17,35 +17,41 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const animTween = { type: "tween", ease: "easeOut", duration: 0.25 };
 const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: animTween } };
 
+// 🎵 AUDIO TONES
+const RING_TONE = new Audio('https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg');
+RING_TONE.loop = true;
+
 export default function UserChat() {
   const [chatId, setChatId] = useState(null); 
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
   const [isAdminTyping, setIsAdminTyping] = useState(false);
   
+  // File & AI State
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [aiReplies, setAiReplies] = useState([]);
   const [showAIReplies, setShowAIReplies] = useState(false);
-  
   const [pendingImage, setPendingImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
   const [compressImage, setCompressImage] = useState(true);
   const [selectedImage, setSelectedImage] = useState(null);
   const [replyingToId, setReplyingToId] = useState(null);
   
+  // App State
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
   const [privacyMode, setPrivacyMode] = useState(false);
   const [isLoggingOut, setIsLoggingOut] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   const [connectionError, setConnectionError] = useState("");
 
+  // User Profile State
   const [showProfile, setShowProfile] = useState(false);
   const [userProfile, setUserProfile] = useState({ name: "", bio: "", avatar: "" });
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   
-  // 🎥 NATIVE VIDEO STATE
-  const [activeVideoRoom, setActiveVideoRoom] = useState(false);
+  // 🎥 SIGNALING & NATIVE VIDEO STATE
+  const [videoCallState, setVideoCallState] = useState(null); // { roomId, isIncoming }
 
   const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
@@ -56,6 +62,7 @@ export default function UserChat() {
   const ignoreBlurRef = useRef(false); 
   const audioRef = useRef(typeof Audio !== "undefined" ? new Audio('/pop.mp3') : null);
 
+  // --- 1. GLOBAL EVENT LISTENERS ---
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
@@ -76,10 +83,12 @@ export default function UserChat() {
     };
   }, [selectedImage]);
 
+  // --- 2. FETCH MESSAGES & PROFILE ---
   useEffect(() => {
     if (!chatId) return;
     setConnectionError("");
     
+    // Fetch Profile Data
     const fetchProfile = async () => {
       const docSnap = await getDoc(doc(db, 'chats', chatId));
       if (docSnap.exists() && docSnap.data().userProfile) setUserProfile(docSnap.data().userProfile);
@@ -87,7 +96,7 @@ export default function UserChat() {
     fetchProfile();
 
     const q = query(collection(db, 'chats', chatId, 'messages'), orderBy('timestamp', 'asc'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
+    const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       const fetchedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setMessages(fetchedMessages);
       if (previousMessageCount.current !== 0 && fetchedMessages.length > previousMessageCount.current) {
@@ -98,12 +107,31 @@ export default function UserChat() {
       setTimeout(() => scrollToBottom('auto'), 100);
     }, () => setConnectionError("Secure connection lost."));
 
-    const unsubscribeTyping = onSnapshot(doc(db, 'chats', chatId), (docSnap) => {
-      if (docSnap.exists()) setIsAdminTyping(docSnap.data().adminTyping || false);
+    const unsubscribeDoc = onSnapshot(doc(db, 'chats', chatId), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setIsAdminTyping(data.adminTyping || false);
+
+        // 🚨 WEBRTC SIGNALING: Listen for Call States
+        if (data.activeCall) {
+          if (data.activeCall.status === 'ringing' && data.activeCall.caller === 'admin') {
+            RING_TONE.play().catch(()=>{});
+            setVideoCallState({ roomId: data.activeCall.roomId, isIncoming: true });
+          } else if (data.activeCall.status === 'ended' || data.activeCall.status === 'rejected') {
+            RING_TONE.pause();
+            setVideoCallState(null);
+          }
+        } else {
+          RING_TONE.pause();
+          setVideoCallState(null);
+        }
+      }
     });
-    return () => { unsubscribe(); unsubscribeTyping(); previousMessageCount.current = 0; };
+
+    return () => { unsubscribeMessages(); unsubscribeDoc(); previousMessageCount.current = 0; RING_TONE.pause(); };
   }, [chatId]);
 
+  // --- 3. RECEIPTS & PRESENCE ---
   useEffect(() => {
     if (!chatId) return;
     const hasFocus = document.hasFocus();
@@ -136,11 +164,40 @@ export default function UserChat() {
     return () => { setOffline(); window.removeEventListener('visibilitychange', handleVisibility); window.removeEventListener('beforeunload', setOffline); };
   }, [chatId]);
 
+  // --- UI SCROLL HELPERS ---
   const scrollToBottom = (behavior = 'smooth') => { if (chatContainerRef.current) chatContainerRef.current.scrollTo({ top: chatContainerRef.current.scrollHeight, behavior }); };
   const handleScroll = (e) => setShowScrollButton(e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight > 100);
   const handleInputFocus = () => { if (chatId) setDoc(doc(db, 'chats', chatId), { userTyping: true }, { merge: true }).catch(()=>{}); };
   const handleInputBlur = () => { if (chatId) setDoc(doc(db, 'chats', chatId), { userTyping: false }, { merge: true }).catch(()=>{}); };
 
+  // --- 🎥 VIDEO CALL HANDLERS ---
+  const initiateCall = async () => {
+    if (!chatId) return;
+    const roomId = `vault-${Date.now()}`;
+    await updateDoc(doc(db, 'chats', chatId), { activeCall: { caller: 'user', status: 'ringing', roomId: roomId } });
+    setVideoCallState({ roomId, isIncoming: false });
+  };
+
+  const acceptCall = async () => {
+    RING_TONE.pause();
+    if (videoCallState?.roomId) {
+      await updateDoc(doc(db, 'chats', chatId), { 'activeCall.status': 'in-progress' });
+      setVideoCallState({ ...videoCallState, isIncoming: false }); 
+    }
+  };
+
+  const rejectCall = async () => {
+    RING_TONE.pause();
+    await updateDoc(doc(db, 'chats', chatId), { 'activeCall.status': 'rejected' });
+    setVideoCallState(null);
+  };
+
+  const endCallFirebase = async () => {
+    await updateDoc(doc(db, 'chats', chatId), { activeCall: null });
+    setVideoCallState(null);
+  };
+
+  // --- MESSAGE ENGINE ---
   const generateAIQuickReplies = async () => {
     if (showAIReplies && aiReplies.length > 0) { setShowAIReplies(false); return; }
     if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('PASTE')) return alert("Missing API Key");
@@ -159,14 +216,6 @@ export default function UserChat() {
   };
 
   const handleImageSelect = (e) => { const file = e.target.files[0]; if (!file) return; setPendingImage(file); setPreviewUrl(URL.createObjectURL(file)); e.target.value = null; };
-
-  // 🎥 START USER VIDEO CALL
-  const handleStartVideoCall = async () => {
-    if (!chatId) return;
-    await addDoc(collection(db, 'chats', chatId, 'messages'), { text: "Started a Secure Video Call", isVideoCall: true, sender: "user", timestamp: serverTimestamp(), status: "sent" });
-    setActiveVideoRoom(true);
-    scrollToBottom('auto');
-  };
 
   const handleSendText = async (e, overrideText = null) => {
     if (e) e.preventDefault();
@@ -214,6 +263,7 @@ export default function UserChat() {
     } catch (err) { setConnectionError("Delivery Failed: Session is Blocked or Expired."); } finally { setIsUploading(false); }
   };
 
+  // --- PROFILE LOGIC ---
   const handleSaveProfile = async () => {
     setIsSavingProfile(true);
     try {
@@ -265,7 +315,8 @@ export default function UserChat() {
   if (!chatId) return <Login onLogin={setChatId} />;
 
   return (
-    <div className="fixed inset-0 w-full flex flex-col bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] overflow-hidden font-sans text-[#4A3C31]">
+    // ✅ BUG FIX: min-h-0 and min-w-0 prevents layout exploding
+    <div className="fixed inset-0 w-full flex flex-col bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] overflow-hidden font-sans text-[#4A3C31] min-h-0 min-w-0">
       
       <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
         <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#C1B2A6] mix-blend-multiply blur-[100px]" />
@@ -317,12 +368,33 @@ export default function UserChat() {
         )}
       </AnimatePresence>
 
+      {/* 📞 INCOMING CALL OVERLAY */}
+      <AnimatePresence>
+        {videoCallState?.isIncoming && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[600] bg-black/80 backdrop-blur-2xl flex flex-col items-center justify-center text-white">
+            <div className="w-32 h-32 bg-white/10 rounded-full flex items-center justify-center mb-8 animate-[pulse_1s_infinite]">
+              <PhoneIncoming size={48} className="text-emerald-400" />
+            </div>
+            <h2 className="text-3xl font-bold mb-2 tracking-tight">Incoming Video Call</h2>
+            <p className="text-white/60 font-medium mb-12">Administrator is attempting to connect securely.</p>
+            <div className="flex gap-6">
+              <button onClick={rejectCall} className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center shadow-[0_0_30px_rgba(239,68,68,0.5)] transition-transform hover:scale-110"><PhoneOff size={28} /></button>
+              <button onClick={acceptCall} className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-600 flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.5)] transition-transform hover:scale-110"><Video size={28} /></button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* 🎥 PEER.JS NATIVE VIDEO OVERLAY */}
       <AnimatePresence>
-        {activeVideoRoom && (
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={animTween} className="fixed inset-0 z-[200] bg-[#1a1614] flex flex-col">
-            <NativeVideoCall chatId={chatId} myRole="user" onClose={() => setActiveVideoRoom(false)} />
-          </motion.div>
+        {videoCallState && !videoCallState.isIncoming && (
+          <NativeVideoCall 
+            chatId={chatId} 
+            myRole="user" 
+            roomId={videoCallState.roomId}
+            isIncoming={false}
+            onClose={endCallFirebase} 
+          />
         )}
       </AnimatePresence>
 
@@ -345,7 +417,7 @@ export default function UserChat() {
                 </div>
               </div>
               <div className="flex gap-2">
-                <button onClick={handleStartVideoCall} className="p-2 sm:p-2.5 rounded-xl text-blue-600 hover:bg-[#E8E1D5] transition-colors"><Video size={20} /></button>
+                <button onClick={initiateCall} className="p-2 sm:p-2.5 rounded-xl text-blue-600 hover:bg-[#E8E1D5] transition-colors"><Video size={20} /></button>
                 <button onClick={() => setShowProfile(true)} className="p-2 sm:p-2.5 rounded-xl text-[#7A6B5D] hover:bg-[#E8E1D5] hover:text-[#5A4535] transition-colors"><UserCircle size={22} /></button>
                 <button onClick={handleLogout} className="p-2 sm:p-2.5 rounded-xl text-[#7A6B5D] hover:text-red-600 hover:bg-red-50 transition-colors"><LogOut size={20} /></button>
               </div>
@@ -374,15 +446,7 @@ export default function UserChat() {
                         )}
 
                         <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border ${isUser ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
-                          {msg.isVideoCall ? (
-                            <div className="flex flex-col items-center justify-center p-3 bg-black/10 rounded-xl border border-black/10 mb-1">
-                              <Video size={28} className={`mb-2 ${isUser ? 'text-[#F9F6F0]' : 'text-[#5A4535]'}`} />
-                              <p className="font-bold text-sm mb-3">Secure Video Call</p>
-                              <button onClick={() => setActiveVideoRoom(true)} className={`px-5 py-2 rounded-full font-bold text-xs shadow-md transition-transform hover:scale-105 ${isUser ? 'bg-[#F9F6F0] text-[#5A4535]' : 'bg-[#5A4535] text-[#F9F6F0]'}`}>
-                                JOIN IN-APP
-                              </button>
-                            </div>
-                          ) : msg.isImage ? (
+                          {msg.isImage ? (
                             <div className="relative group/img cursor-zoom-in rounded-lg overflow-hidden mb-1" onClick={() => setSelectedImage(msg.text)}>
                               <img src={msg.text} alt="Attachment" className="w-full max-w-[240px] sm:max-w-[320px] object-cover transition-transform duration-300 group-hover/img:scale-105" />
                               <div className="absolute inset-0 bg-[#3A2D23]/0 group-hover/img:bg-[#3A2D23]/10 transition-colors flex items-center justify-center"><Maximize className="text-white opacity-0 group-hover/img:opacity-100" size={24} /></div>
@@ -454,15 +518,16 @@ export default function UserChat() {
                 <form className="flex gap-2 items-end w-full">
                   <div className="flex gap-1 mb-1">
                     <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageSelect} className="hidden" />
-                    <button type="button" onClick={() => { ignoreBlurRef.current = true; fileInputRef.current?.click(); }} disabled={isUploading || isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-[#5A4535] shadow-sm disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
+                    <button type="button" onClick={() => { ignoreBlurRef.current = true; fileInputRef.current?.click(); }} disabled={isUploading || isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:border-[#8C7462] hover:text-[#5A4535] shadow-sm disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
                       {isUploading ? <Loader2 size={20} className="animate-spin" /> : <ImageIcon size={20} />}
                     </button>
-                    <button type="button" onClick={generateAIQuickReplies} title="AI Replies" disabled={isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#E8E1D5] border border-[#C1B2A6]/50 text-[#8C7462] hover:bg-[#C1B2A6]/30 shadow-sm min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
+                    <button type="button" onClick={generateAIQuickReplies} title="AI Replies" disabled={isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#E8E1D5] border border-[#C1B2A6]/50 text-[#8C7462] hover:bg-[#C1B2A6]/50 shadow-sm min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
                       <Sparkles size={20} className={isGeneratingAI ? "animate-pulse" : ""} />
                     </button>
                   </div>
 
                   <div className="flex-1 relative bg-[#F9F6F0] border border-[#C1B2A6]/50 rounded-2xl shadow-sm focus-within:border-[#8C7462] focus-within:ring-2 focus-within:ring-[#E8E1D5] transition-all flex flex-col p-1.5">
+                    
                     {previewUrl && (
                       <div className="relative mb-2 ml-2 mt-2 inline-block w-max">
                         <img src={previewUrl} className="h-20 w-auto rounded-lg border border-[#C1B2A6]/50 object-cover shadow-sm" alt="Preview" />
@@ -476,12 +541,13 @@ export default function UserChat() {
                     <div className="flex items-end w-full">
                       <textarea 
                         ref={textareaRef} value={newMessage} 
-                        onChange={(e) => { setNewMessage(e.target.value); e.target.style.height = '48px'; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`; }}
+                        onChange={(e) => { setNewMessage(e.target.value); e.target.style.height = '48px'; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`; }} 
                         onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(e); } }}
-                        onFocus={handleInputFocus} onBlur={handleInputBlur} placeholder={previewUrl ? "Caption (optional)..." : "Message..."} rows={1} disabled={isOffline || isUploading}
+                        onFocus={handleInputFocus} onBlur={handleInputBlur} placeholder={previewUrl ? "Add a caption (optional)..." : "Message..."} disabled={isOffline || isUploading} rows={1}
                         className={`flex-1 bg-transparent py-2.5 text-[16px] text-[#4A3C31] placeholder-[#9E8E81] focus:outline-none resize-none custom-scrollbar leading-relaxed pl-3 pr-12`}
                         style={{ minHeight: '48px' }}
                       />
+                      
                       <div className="absolute right-1.5 bottom-1.5">
                         <motion.button onClick={handleSendText} type="button" whileTap={{ scale: 0.95 }} disabled={(!newMessage.trim() && !pendingImage) || isOffline || isUploading} className="p-2 rounded-xl bg-[#5A4535] text-[#F9F6F0] shadow-sm disabled:opacity-50 transition-opacity min-h-[36px] min-w-[36px] flex items-center justify-center">
                           {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} className="ml-0.5" />}
@@ -489,6 +555,7 @@ export default function UserChat() {
                       </div>
                     </div>
                   </div>
+
                 </form>
               </div>
             </footer>

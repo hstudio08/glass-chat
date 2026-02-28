@@ -2,10 +2,11 @@ import { useState, useEffect, useRef } from 'react';
 import { auth, db, googleProvider } from '../services/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, addDoc, query, orderBy, onSnapshot, serverTimestamp, updateDoc, deleteDoc } from 'firebase/firestore';
-import { Send, LogOut, Plus, Trash2, Clock, ShieldHalf, Activity, MessageSquare, KeyRound, Settings, Ghost, Edit2, X, Eraser, Sun, Moon, Download, ChevronLeft, Copy, Image as ImageIcon, Loader2, Maximize, ChevronDown, Sparkles, Edit3, Check, CheckCheck, EyeOff, Bell, MapPin, Mail, UserPlus, Reply, Video, PhoneOff } from 'lucide-react';
+import { Send, LogOut, Plus, Trash2, Clock, ShieldHalf, Activity, MessageSquare, KeyRound, Settings, Ghost, Edit2, X, Eraser, Download, ChevronLeft, Copy, Image as ImageIcon, Loader2, Maximize, ChevronDown, Sparkles, Edit3, Check, CheckCheck, EyeOff, Bell, MapPin, Mail, UserPlus, Reply, Video, PhoneIncoming, PhoneOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import NativeVideoCall from '../components/NativeVideoCall';
+
 const ADMIN_EMAIL = "hstudio.webdev@gmail.com";
 
 // ==========================================
@@ -18,6 +19,10 @@ const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 const animTween = { type: "tween", ease: "easeOut", duration: 0.25 };
 const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: animTween } };
 
+// 🎵 AUDIO TONES
+const RING_TONE = new Audio('https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg');
+RING_TONE.loop = true;
+
 export default function AdminDashboard() {
   const [adminUser, setAdminUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -26,10 +31,10 @@ export default function AdminDashboard() {
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [showScrollButton, setShowScrollButton] = useState(false);
   
+  // AI & Image State
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [aiReplies, setAiReplies] = useState([]);
   const [showAIReplies, setShowAIReplies] = useState(false);
-  
   const [isUploading, setIsUploading] = useState(false);
   const [pendingImage, setPendingImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
@@ -37,6 +42,7 @@ export default function AdminDashboard() {
   const [selectedImage, setSelectedImage] = useState(null);
   const ignoreBlurRef = useRef(false);
   
+  // Database & Feature State
   const [accessCodes, setAccessCodes] = useState([]);
   const [accessRequests, setAccessRequests] = useState([]); 
   const [activeChatId, setActiveChatId] = useState(null);
@@ -47,33 +53,34 @@ export default function AdminDashboard() {
   const [hideReceipts, setHideReceipts] = useState(false); 
   const [editingMsgId, setEditingMsgId] = useState(null);
   const [replyingToId, setReplyingToId] = useState(null);
+  const [connectionError, setConnectionError] = useState("");
   
   const [newCodeId, setNewCodeId] = useState("");
   const [newCodeName, setNewCodeName] = useState("");
   const [expiryHours, setExpiryHours] = useState("0"); 
   
-  // 🎥 NATIVE VIDEO STATE
-  const [activeVideoRoom, setActiveVideoRoom] = useState(false);
+  // 🎥 SIGNALING & NATIVE VIDEO STATE
+  const [videoCallState, setVideoCallState] = useState(null); // { roomId, isIncoming }
 
-  const messagesEndRef = useRef(null);
   const chatContainerRef = useRef(null);
   const textareaRef = useRef(null);
   const fileInputRef = useRef(null);
-  const audioRef = useRef(typeof Audio !== "undefined" ? new Audio('/pop.mp3') : null);
+  const messagesEndRef = useRef(null);
   const previousMessageCount = useRef(0);
+  const audioRef = useRef(typeof Audio !== "undefined" ? new Audio('/pop.mp3') : null);
   const isWindowFocused = useRef(true);
 
+  // --- 1. AUTH & FOCUS LISTENERS ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
-      if (user && user.email === ADMIN_EMAIL) setAdminUser(user);
-      else setAdminUser(null);
+      if (user && user.email === ADMIN_EMAIL) setAdminUser(user); else setAdminUser(null);
       setAuthLoading(false);
     });
     return () => unsubscribe();
   }, []);
 
-  const handleAdminLogout = async () => {
-    try { await signOut(auth); setAdminUser(null); setActiveChatId(null); setMessages([]); setActiveTab('chats'); } catch (err) {}
+  const handleAdminLogout = async () => { 
+    try { await signOut(auth); setAdminUser(null); setActiveChatId(null); setMessages([]); setActiveTab('chats'); } catch (err) { console.error(err); } 
   };
 
   useEffect(() => {
@@ -85,6 +92,7 @@ export default function AdminDashboard() {
     return () => { window.removeEventListener('focus', handleFocus); window.removeEventListener('blur', handleBlur); window.removeEventListener('keyup', handleKeyDown); };
   }, [selectedImage]);
 
+  // --- 2. GLOBAL DATA FETCHING ---
   useEffect(() => {
     if (!adminUser) return;
     const unsubCodes = onSnapshot(query(collection(db, 'access_codes')), (snapshot) => setAccessCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
@@ -92,8 +100,9 @@ export default function AdminDashboard() {
     return () => { unsubCodes(); unsubReqs(); };
   }, [adminUser]);
 
+  // --- 3. CHAT & SIGNALING ENGINE ---
   useEffect(() => {
-    setShowAIReplies(false); setAiReplies([]); setPendingImage(null); setPreviewUrl(null); setReplyingToId(null);
+    setShowAIReplies(false); setAiReplies([]); setPendingImage(null); setPreviewUrl(null); setReplyingToId(null); setConnectionError("");
     if (!activeChatId) return;
     
     const unsubscribeMessages = onSnapshot(query(collection(db, 'chats', activeChatId, 'messages'), orderBy('timestamp', 'asc')), (snapshot) => {
@@ -109,12 +118,32 @@ export default function AdminDashboard() {
       }
       previousMessageCount.current = fetchedMessages.length;
       setTimeout(() => scrollToBottom('auto'), 100);
-    });
+    }, () => setConnectionError("Secure connection lost."));
 
-    const unsubscribeDoc = onSnapshot(doc(db, 'chats', activeChatId), (docSnap) => { if (docSnap.exists()) setActiveChatDoc(docSnap.data()); });
-    return () => { unsubscribeMessages(); unsubscribeDoc(); previousMessageCount.current = 0; };
+    const unsubscribeDoc = onSnapshot(doc(db, 'chats', activeChatId), (docSnap) => { 
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setActiveChatDoc(data);
+
+        // 🚨 WEBRTC SIGNALING: Listen for Call States
+        if (data.activeCall) {
+          if (data.activeCall.status === 'ringing' && data.activeCall.caller === 'user') {
+            RING_TONE.play().catch(()=>{});
+            setVideoCallState({ roomId: data.activeCall.roomId, isIncoming: true });
+          } else if (data.activeCall.status === 'ended' || data.activeCall.status === 'rejected') {
+            RING_TONE.pause();
+            setVideoCallState(null);
+          }
+        } else {
+          RING_TONE.pause();
+          setVideoCallState(null);
+        }
+      } 
+    });
+    return () => { unsubscribeMessages(); unsubscribeDoc(); previousMessageCount.current = 0; RING_TONE.pause(); };
   }, [activeChatId]);
 
+  // --- 4. PRESENCE & RECEIPTS ENGINE ---
   useEffect(() => {
     if (!activeChatId) return;
     const setOnlineStatus = async () => setDoc(doc(db, 'chats', activeChatId), { adminOnline: !ghostMode, adminTyping: false }, { merge: true }).catch(()=>{});
@@ -142,11 +171,41 @@ export default function AdminDashboard() {
     return () => window.removeEventListener('focus', handleFocus);
   }, [messages, activeChatId, hideReceipts]);
 
+  // --- UI SCROLL HELPERS ---
   const scrollToBottom = (behavior = 'smooth') => {
-    if (chatContainerRef.current) chatContainerRef.current.scrollTo({ top: chatContainerRef.current.scrollHeight, behavior });
+    if (messagesEndRef.current) messagesEndRef.current.scrollIntoView({ behavior });
   };
   const handleScroll = (e) => setShowScrollButton(e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight > 100);
 
+  // --- 🎥 VIDEO CALL HANDLERS ---
+  const initiateCall = async () => {
+    if (!activeChatId || !activeChatDoc) return;
+    if (!activeChatDoc.userOnline) { alert("User is offline. Call cannot be delivered."); return; }
+    const roomId = `vault-${Date.now()}`;
+    await updateDoc(doc(db, 'chats', activeChatId), { activeCall: { caller: 'admin', status: 'ringing', roomId: roomId } });
+    setVideoCallState({ roomId, isIncoming: false });
+  };
+
+  const acceptCall = async () => {
+    RING_TONE.pause();
+    if (videoCallState?.roomId) {
+      await updateDoc(doc(db, 'chats', activeChatId), { 'activeCall.status': 'in-progress' });
+      setVideoCallState({ ...videoCallState, isIncoming: false }); 
+    }
+  };
+
+  const rejectCall = async () => {
+    RING_TONE.pause();
+    await updateDoc(doc(db, 'chats', activeChatId), { 'activeCall.status': 'rejected' });
+    setVideoCallState(null);
+  };
+
+  const endCallFirebase = async () => {
+    await updateDoc(doc(db, 'chats', activeChatId), { activeCall: null });
+    setVideoCallState(null);
+  };
+
+  // --- REQUEST & ID HANDLERS ---
   const handleApproveRequest = async (request) => {
     const generatedId = `VIP-${Math.floor(1000 + Math.random() * 9000)}`;
     const customId = window.prompt(`Assign an Access ID for ${request.name}:`, generatedId);
@@ -163,6 +222,8 @@ export default function AdminDashboard() {
     const body = encodeURIComponent(`Hello ${request.name},\n\nYour request for secure chat access has been approved.\n\nYour Access ID is: ${request.grantedId}\n\nPlease enter this ID on the secure portal at tinyurl.com/haadisabzar to begin our encrypted session.\n\nBest regards,\nSupport Team`);
     window.location.href = `mailto:${request.email}?subject=${subject}&body=${body}`;
   };
+
+  const handleDeleteRequest = async (id) => { if (window.confirm("Permanently delete this request?")) await deleteDoc(doc(db, 'id_requests', id)); };
 
   const handleCreateCode = async (e) => {
     e.preventDefault();
@@ -181,7 +242,6 @@ export default function AdminDashboard() {
   };
 
   const copyToClipboard = (text) => { navigator.clipboard.writeText(text); alert(`Copied ID to clipboard!`); };
-  const handleDeleteRequest = async (id) => { if (window.confirm("Permanently delete this request?")) await deleteDoc(doc(db, 'id_requests', id)); };
 
   const cleanupExpiredIDs = async () => {
     const now = Date.now();
@@ -206,6 +266,7 @@ export default function AdminDashboard() {
     if (activeChatId === id && newStatus === "blocked") { setActiveChatId(null); setShowMobileChat(false); }
   };
 
+  // --- MESSAGE HANDLERS ---
   const generateAIQuickReplies = async () => {
     if (showAIReplies && aiReplies.length > 0) { setShowAIReplies(false); return; }
     if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('PASTE')) return alert("Missing API Key");
@@ -221,14 +282,6 @@ export default function AdminDashboard() {
       const parsedReplies = JSON.parse(result.response.text());
       setAiReplies(Array.isArray(parsedReplies) ? parsedReplies.slice(0,3) : ["Understood.", "I'll check.", "Thank you."]);
     } catch (error) { setAiReplies(["Understood.", "Checking now.", "Thanks."]); } finally { setIsGeneratingAI(false); }
-  };
-
-  // 🎥 START VIDEO CALL
-  const handleStartVideoCall = async () => {
-    if (!activeChatId) return;
-    await addDoc(collection(db, 'chats', activeChatId, 'messages'), { text: "Started a Secure Video Call", isVideoCall: true, sender: "admin", timestamp: serverTimestamp(), status: "sent" });
-    setActiveVideoRoom(true); 
-    scrollToBottom('auto');
   };
 
   const handleImageSelect = (e) => { const file = e.target.files[0]; if (!file) return; setPendingImage(file); setPreviewUrl(URL.createObjectURL(file)); e.target.value = null; };
@@ -284,7 +337,7 @@ export default function AdminDashboard() {
         await addDoc(collection(db, 'chats', activeChatId, 'messages'), { text: currentText, isImage: false, sender: "admin", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
       }
       scrollToBottom('auto');
-    } catch (err) { alert("Delivery Failed."); } finally { setIsUploading(false); }
+    } catch (err) { setConnectionError("Delivery Failed."); } finally { setIsUploading(false); }
   };
 
   const handleTyping = (e) => {
@@ -294,9 +347,10 @@ export default function AdminDashboard() {
 
   const deleteMessage = (msgId) => { if (window.confirm("Delete this message?")) deleteDoc(doc(db, 'chats', activeChatId, 'messages', msgId)).catch(()=>{}); };
   const clearEntireChatHistory = () => { if (window.confirm("NUKE PROTOCOL: Permanently delete ALL messages?")) { messages.forEach(msg => deleteDoc(doc(db, 'chats', activeChatId, 'messages', msg.id)).catch(()=>{})); } };
+  
   const exportChatHistory = () => {
     if (!messages.length) return alert("No messages to export.");
-    const content = messages.map(m => `[${m.timestamp && typeof m.timestamp.toDate === 'function' ? new Date(m.timestamp.toDate()).toLocaleString() : "Unknown"}] ${m.sender.toUpperCase()}: ${m.isImage ? '[IMAGE]' : (m.isVideoCall ? '[VIDEO CALL]' : m.text)}`).join('\n');
+    const content = messages.map(m => `[${m.timestamp && typeof m.timestamp.toDate === 'function' ? new Date(m.timestamp.toDate()).toLocaleString() : "Unknown"}] ${m.sender.toUpperCase()}: ${m.isImage ? '[IMAGE]' : m.text}`).join('\n');
     const blob = new Blob([content], { type: 'text/plain' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Transcript_${activeChatId}.txt`; a.click();
   };
@@ -345,12 +399,14 @@ export default function AdminDashboard() {
   }
 
   return (
-    <div className="fixed inset-0 w-full flex flex-col sm:flex-row bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] overflow-hidden font-sans text-[#4A3C31]">
+    <div className="fixed inset-0 flex flex-col sm:flex-row bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] overflow-hidden font-sans text-[#4A3C31] min-h-0 min-w-0">
+      
       <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
         <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#C1B2A6] mix-blend-multiply blur-[100px]" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#E8E1D5] mix-blend-multiply blur-[100px]" />
       </div>
 
+      {/* 🖼️ IMAGE LIGHTBOX */}
       <AnimatePresence>
         {selectedImage && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="fixed inset-0 z-[100] bg-[#3A2D23]/95 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setSelectedImage(null)}>
@@ -360,12 +416,33 @@ export default function AdminDashboard() {
         )}
       </AnimatePresence>
 
-      {/* 🎥 PEER.JS NATIVE VIDEO OVERLAY */}
+      {/* 📞 INCOMING CALL OVERLAY */}
       <AnimatePresence>
-        {activeVideoRoom && (
-          <motion.div initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.95 }} transition={animTween} className="fixed inset-0 z-[200] bg-[#1a1614] flex flex-col">
-            <NativeVideoCall chatId={activeChatId} myRole="admin" onClose={() => setActiveVideoRoom(false)} />
+        {videoCallState?.isIncoming && (
+          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[600] bg-black/80 backdrop-blur-2xl flex flex-col items-center justify-center text-white">
+            <div className="w-32 h-32 bg-white/10 rounded-full flex items-center justify-center mb-8 animate-[pulse_1s_infinite]">
+              <PhoneIncoming size={48} className="text-emerald-400" />
+            </div>
+            <h2 className="text-3xl font-bold mb-2 tracking-tight">Incoming Secure Call</h2>
+            <p className="text-white/60 font-medium mb-12">Client is attempting to connect.</p>
+            <div className="flex gap-6">
+              <button onClick={rejectCall} className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center shadow-[0_0_30px_rgba(239,68,68,0.5)] transition-transform hover:scale-110"><PhoneOff size={28} /></button>
+              <button onClick={acceptCall} className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-600 flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.5)] transition-transform hover:scale-110"><Video size={28} /></button>
+            </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* 🎥 ACTIVE NATIVE VIDEO CALL */}
+      <AnimatePresence>
+        {videoCallState && !videoCallState.isIncoming && (
+          <NativeVideoCall 
+            chatId={activeChatId} 
+            myRole="admin" 
+            roomId={videoCallState.roomId}
+            isIncoming={false}
+            onClose={endCallFirebase} 
+          />
         )}
       </AnimatePresence>
 
@@ -395,10 +472,12 @@ export default function AdminDashboard() {
 
       <main className="flex-1 flex min-w-0 min-h-0 overflow-hidden z-10 relative">
         <AnimatePresence mode="wait">
+          
+          {/* --- TAB: CHATS --- */}
           {activeTab === 'chats' && (
-            <motion.div key="chats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="flex w-full h-full overflow-hidden">
-              <div className={`w-full sm:w-[320px] flex-shrink-0 flex flex-col h-full bg-[#F9F6F0]/50 backdrop-blur-md border-r border-[#C1B2A6]/50 ${showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
-                <div className="p-5 border-b border-[#C1B2A6]/50 flex justify-between items-center" style={{ paddingTop: 'calc(1.25rem + env(safe-area-inset-top))' }}>
+            <motion.div key="chats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="flex w-full h-full min-h-0 min-w-0">
+              <div className={`w-full sm:w-[320px] shrink-0 flex flex-col h-full bg-[#F9F6F0]/50 backdrop-blur-md border-r border-[#C1B2A6]/50 ${showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
+                <div className="p-5 border-b border-[#C1B2A6]/50 flex justify-between items-center shrink-0" style={{ paddingTop: 'calc(1.25rem + env(safe-area-inset-top))' }}>
                   <h2 className="font-serif font-bold text-xl text-[#3A2D23]">Sessions</h2>
                   <div className="px-2.5 py-1 bg-[#E8E1D5] text-[#5A4535] rounded-full text-xs font-bold border border-[#C1B2A6]/30">{accessCodes.filter(c=>c.status==='active').length}</div>
                 </div>
@@ -419,10 +498,10 @@ export default function AdminDashboard() {
                 </div>
               </div>
 
-              <div className={`flex-1 min-w-0 flex flex-col h-full overflow-hidden relative ${!showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
+              <div className={`flex-1 min-w-0 flex flex-col h-full relative ${!showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
                 {activeChatId ? (
                   <>
-                    <header className="flex-none bg-[#F9F6F0]/70 backdrop-blur-xl border-b border-[#C1B2A6]/50 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-20 shadow-[0_10px_30px_rgba(90,70,50,0.03)]" style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}>
+                    <header className="flex-none shrink-0 bg-[#F9F6F0]/70 backdrop-blur-xl border-b border-[#C1B2A6]/50 px-4 sm:px-6 py-3 sm:py-4 flex items-center justify-between z-20 shadow-[0_10px_30px_rgba(90,70,50,0.03)]" style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}>
                       <div className="flex items-center gap-3">
                         <button onClick={() => setShowMobileChat(false)} className="sm:hidden p-2 -ml-2 rounded-xl text-[#8C7462] hover:bg-[#E8E1D5]"><ChevronLeft size={24} /></button>
                         <div className="relative">
@@ -436,9 +515,12 @@ export default function AdminDashboard() {
                       </div>
                       <div className="flex items-center gap-2">
                         {ghostMode && <div className="hidden sm:flex items-center gap-1.5 bg-[#E8E1D5] border border-[#C1B2A6] px-2.5 py-1 rounded-md text-[#5A4535]"><Ghost size={12} /> <span className="text-[10px] font-bold uppercase tracking-widest">Ghost</span></div>}
-                        <button onClick={handleStartVideoCall} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:text-blue-600 shadow-sm"><Video size={18} /></button>
-                        <button onClick={exportChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-[#5A4535] shadow-sm"><Download size={18} /></button>
-                        <button onClick={clearEntireChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-red-600 shadow-sm"><Eraser size={18} /></button>
+                        
+                        {/* 📞 CALL BUTTON */}
+                        <button onClick={initiateCall} title="Start Secure Video Call" className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:text-blue-600 shadow-sm transition-colors"><Video size={18} /></button>
+                        
+                        <button onClick={exportChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-[#5A4535] shadow-sm transition-colors"><Download size={18} /></button>
+                        <button onClick={clearEntireChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-red-600 shadow-sm transition-colors"><Eraser size={18} /></button>
                       </div>
                     </header>
                     
@@ -457,15 +539,7 @@ export default function AdminDashboard() {
                                 )}
 
                                 <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border ${isAdmin ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
-                                  {msg.isVideoCall ? (
-                                    <div className="flex flex-col items-center justify-center p-3 bg-[#F9F6F0]/10 rounded-xl border border-[#C1B2A6]/30 mb-1">
-                                      <Video size={28} className={`mb-2 ${isAdmin ? 'text-[#F9F6F0]' : 'text-[#5A4535]'}`} />
-                                      <p className="font-bold text-sm mb-3">Secure Video Call</p>
-                                      <button onClick={() => setActiveVideoRoom(true)} className={`px-5 py-2 rounded-full font-bold text-xs shadow-md transition-transform hover:scale-105 ${isAdmin ? 'bg-[#F9F6F0] text-[#5A4535]' : 'bg-[#5A4535] text-[#F9F6F0]'}`}>
-                                        JOIN ROOM
-                                      </button>
-                                    </div>
-                                  ) : msg.isImage ? (
+                                  {msg.isImage ? (
                                     <div className="relative group/img cursor-zoom-in rounded-lg overflow-hidden mb-1" onClick={() => setSelectedImage(msg.text)}>
                                       <img src={msg.text} alt="Attachment" className="w-full max-w-[240px] sm:max-w-[320px] object-cover transition-transform duration-300 group-hover/img:scale-105" />
                                       <div className="absolute inset-0 bg-[#3A2D23]/0 group-hover/img:bg-[#3A2D23]/10 transition-colors flex items-center justify-center"><Maximize className="text-white opacity-0 group-hover/img:opacity-100" size={24} /></div>
@@ -474,6 +548,7 @@ export default function AdminDashboard() {
                                     <p className="whitespace-pre-wrap break-words text-[15px] sm:text-[16px] leading-relaxed">{msg.text}</p>
                                   )}
                                   <div className={`text-[10px] font-medium mt-1.5 flex items-center gap-0.5 ${isAdmin ? 'justify-end text-[#C1B2A6]' : 'justify-start text-[#9E8E81]'}`}>
+                                    {/* SILENT EDIT FOR ADMIN */}
                                     {msg.isEdited && !isAdmin && <span className="italic mr-1">(edited)</span>}
                                     {formatTime(msg.timestamp)}
                                     {isAdmin && !hideReceipts && <MessageStatusIcon msg={msg} />}
@@ -483,7 +558,7 @@ export default function AdminDashboard() {
                                 
                                 <div className={`hidden sm:flex absolute top-1/2 -translate-y-1/2 ${isAdmin ? '-left-[104px]' : '-right-[72px]'} opacity-0 group-hover:opacity-100 transition-opacity gap-1.5`}>
                                   <button onClick={() => setReplyingToId(msg.id)} className="p-2 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 shadow-sm hover:text-[#5A4535] text-[#7A6B5D] transition-colors"><Reply size={14}/></button>
-                                  {isAdmin && !msg.isImage && !msg.isVideoCall && <button onClick={() => {setEditingMsgId(msg.id); setNewMessage(msg.text);}} className="p-2 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 shadow-sm hover:text-[#5A4535] text-[#7A6B5D] transition-colors"><Edit2 size={14}/></button>}
+                                  {isAdmin && !msg.isImage && <button onClick={() => {setEditingMsgId(msg.id); setNewMessage(msg.text);}} className="p-2 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 shadow-sm hover:text-[#5A4535] text-[#7A6B5D] transition-colors"><Edit2 size={14}/></button>}
                                   {isAdmin && <button onClick={() => deleteMessage(msg.id)} className="p-2 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 shadow-sm hover:text-red-600 text-[#7A6B5D] transition-colors"><Trash2 size={14}/></button>}
                                 </div>
                               </motion.div>
@@ -510,26 +585,32 @@ export default function AdminDashboard() {
                       )}
                     </AnimatePresence>
 
-                    <footer className="flex-none bg-[#F9F6F0]/80 backdrop-blur-xl border-t border-[#C1B2A6]/50 px-3 sm:px-6 py-3 z-20 flex flex-col items-center shadow-[0_-10px_30px_rgba(90,70,50,0.03)]" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
+                    <footer className="flex-none shrink-0 bg-[#F9F6F0]/80 backdrop-blur-xl border-t border-[#C1B2A6]/50 px-3 sm:px-6 py-3 z-20 flex flex-col items-center shadow-[0_-10px_30px_rgba(90,70,50,0.03)]" style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}>
                       <div className="w-full max-w-4xl flex flex-col gap-2 relative">
                         
                         <AnimatePresence>
+                          {connectionError && (
+                            <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center gap-2 bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-xl text-xs font-bold shadow-sm mb-1">
+                              <AlertCircle size={14} /> {connectionError}
+                            </motion.div>
+                          )}
                           {replyingToId && (
                             <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center justify-between bg-[#E8E1D5] border border-[#C1B2A6]/50 px-4 py-2 rounded-xl text-xs font-bold text-[#5A4535] shadow-sm mb-1">
                               <span className="truncate flex-1 flex items-center gap-2"><Reply size={14}/> Replying: {messages.find(m => m.id === replyingToId)?.text?.substring(0,40)}...</span>
                               <button onClick={() => setReplyingToId(null)} className="ml-2 bg-[#C1B2A6]/50 p-1 rounded-full hover:bg-[#C1B2A6]"><X size={12}/></button>
                             </motion.div>
                           )}
-                        </AnimatePresence>
-
-                        <AnimatePresence>
                           {showAIReplies && (
                             <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex gap-2 overflow-x-auto no-scrollbar py-1">
                               {isGeneratingAI ? (
-                                <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#E8E1D5] text-[#5A4535] border border-[#C1B2A6]/50 text-xs font-semibold"><Loader2 size={14} className="animate-spin" /> Analyzing context...</div>
+                                <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#E8E1D5] text-[#5A4535] border border-[#C1B2A6]/50 text-xs font-semibold">
+                                  <Loader2 size={14} className="animate-spin" /> Analyzing context...
+                                </div>
                               ) : (
                                 aiReplies.map((reply, i) => (
-                                  <button key={i} onClick={() => handleSendMessage(null, reply)} className="text-[12px] whitespace-nowrap font-bold px-4 py-1.5 rounded-full bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:border-[#8C7462] hover:bg-[#E8E1D5] shadow-sm transition-colors min-h-[36px]">{reply}</button>
+                                  <button key={i} onClick={() => handleSendMessage(null, reply)} className="text-[12px] whitespace-nowrap font-bold px-4 py-1.5 rounded-full bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:border-[#8C7462] hover:bg-[#E8E1D5] shadow-sm transition-colors min-h-[36px]">
+                                    {reply}
+                                  </button>
                                 ))
                               )}
                             </motion.div>
