@@ -1,200 +1,264 @@
-import { useState } from 'react';
-import { doc, getDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../services/firebase';
-import { KeyRound, User, Mail, MapPin, Send, ArrowLeft, Loader2, ShieldCheck, AlertCircle } from 'lucide-react';
+import React, { useState } from 'react';
+import { auth, googleProvider } from '../services/firebase';
+import { signInWithPopup, RecaptchaVerifier, signInWithPhoneNumber } from 'firebase/auth';
 import { motion, AnimatePresence } from 'framer-motion';
+import { Phone, Mail, Loader2, ArrowRight, ShieldCheck } from 'lucide-react';
 
 export default function Login({ onLogin }) {
-  const [mode, setMode] = useState('login'); // 'login' or 'request'
+  // --- UI STATE ---
+  const [authMode, setAuthMode] = useState('phone'); // 'phone' or 'email'
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const [error, setError] = useState('');
 
-  // Login State
-  const [accessId, setAccessId] = useState("");
+  // --- PHONE AUTH STATE ---
+  const [phoneNumber, setPhoneNumber] = useState('');
+  const [otp, setOtp] = useState('');
+  const [confirmationResult, setConfirmationResult] = useState(null);
+  
+  // --- EMAIL AUTH STATE (Phase 3 Prep) ---
+  const [email, setEmail] = useState('');
+  const [emailOtp, setEmailOtp] = useState('');
+  const [emailStep, setEmailStep] = useState('request'); // 'request' or 'verify'
 
-  // Request State
-  const [reqName, setReqName] = useState("");
-  const [reqEmail, setReqEmail] = useState("");
-
-  const handleLogin = async (e) => {
-    e.preventDefault();
-    if (!accessId.trim()) return;
-    setLoading(true);
-    setError("");
-
+  // ==========================================
+  // 1. GOOGLE LOGIN LOGIC
+  // ==========================================
+  const handleGoogleLogin = async () => {
+    setLoading(true); setError('');
     try {
-      const docRef = doc(db, 'access_codes', accessId.trim());
-      const docSnap = await getDoc(docRef);
-
-      if (docSnap.exists()) {
-        const data = docSnap.data();
-        if (data.status === 'active') {
-          // Check expiration
-          if (data.expiresAt && data.expiresAt < Date.now()) {
-            setError("This Access ID has expired.");
-          } else {
-            onLogin(accessId.trim()); // Success!
-          }
-        } else {
-          setError("This Access ID has been blocked by the administrator.");
-        }
-      } else {
-        setError("Invalid Access ID. Please try again.");
-      }
+      const result = await signInWithPopup(auth, googleProvider);
+      // Pass the user ID or email back to the app to log them in
+      onLogin(result.user.email || result.user.uid); 
     } catch (err) {
-      setError("Connection error. Please check your internet.");
-    } finally {
-      setLoading(false);
+      setError('Google Sign-In failed. Please try again.');
+    } finally { 
+      setLoading(false); 
     }
   };
 
-  const handleRequestAccess = async (e) => {
+  // ==========================================
+  // 2. PHONE OTP LOGIC (FIREBASE)
+  // ==========================================
+  const setupRecaptcha = () => {
+    if (!window.recaptchaVerifier) {
+      window.recaptchaVerifier = new RecaptchaVerifier(auth, 'recaptcha-container', { 
+        size: 'invisible' 
+      });
+    }
+  };
+
+  const handleSendPhoneOTP = async (e) => {
     e.preventDefault();
-    if (!reqName.trim() || !reqEmail.trim()) {
-      setError("Please fill in all fields.");
-      return;
+    if (!phoneNumber || phoneNumber.length < 10) {
+      return setError("Enter a valid phone number (e.g. +1234567890).");
     }
+    setLoading(true); setError('');
+    try {
+      setupRecaptcha();
+      const formattedPhone = phoneNumber.startsWith('+') ? phoneNumber : `+${phoneNumber}`;
+      const confirmation = await signInWithPhoneNumber(auth, formattedPhone, window.recaptchaVerifier);
+      setConfirmationResult(confirmation);
+    } catch (err) { 
+      setError('Failed to send OTP. Ensure number includes country code.'); 
+    } finally { 
+      setLoading(false); 
+    }
+  };
+
+  const handleVerifyPhoneOTP = async (e) => {
+    e.preventDefault();
+    if (!otp || otp.length < 6) return setError("Enter the 6-digit code.");
     
-    setLoading(true);
-    setError("");
-    setSuccess("");
-
-    // Request GPS Location
-    if (!navigator.geolocation) {
-      setError("Geolocation is not supported by your browser.");
-      setLoading(false);
-      return;
+    setLoading(true); setError('');
+    try {
+      const result = await confirmationResult.confirm(otp);
+      onLogin(result.user.phoneNumber);
+    } catch (err) { 
+      setError('Invalid code. Please try again.'); 
+    } finally { 
+      setLoading(false); 
     }
+  };
 
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        try {
-          const { latitude, longitude } = position.coords;
-          
-          await addDoc(collection(db, 'id_requests'), {
-            name: reqName.trim(),
-            email: reqEmail.trim(),
-            location: { lat: latitude, lng: longitude },
-            status: 'pending',
-            timestamp: serverTimestamp()
-          });
+  // ==========================================
+  // 3. EMAIL OTP LOGIC (FRONTEND FLOW)
+  // ==========================================
+  const handleSendEmailOTP = async (e) => {
+    e.preventDefault();
+    if (!email.includes('@')) return setError("Enter a valid email address.");
+    
+    setLoading(true); setError('');
+    // Simulate connecting to EmailJS or backend
+    setTimeout(() => { 
+      setEmailStep('verify'); 
+      setLoading(false); 
+    }, 1500);
+  };
 
-          setSuccess("Request sent! The administrator will email you shortly.");
-          setReqName("");
-          setReqEmail("");
-          setTimeout(() => setMode('login'), 3000);
-        } catch (err) {
-          setError("Failed to send request. Please try again.");
-        } finally {
-          setLoading(false);
-        }
-      },
-      (geoError) => {
-        setError("Location access is required to request an ID. Please allow location permissions and try again.");
-        setLoading(false);
-      },
-      { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-    );
+  const handleVerifyEmailOTP = async (e) => {
+    e.preventDefault();
+    if (!emailOtp) return setError("Enter the verification code.");
+    
+    setLoading(true); setError('');
+    // Simulate verification success
+    setTimeout(() => {
+      if (emailOtp === '123456') {
+        onLogin(email);
+      } else { 
+        setError('Invalid Code. Use 123456 for testing.'); 
+        setLoading(false); 
+      }
+    }, 1000);
   };
 
   return (
-    <div className="flex min-h-[100dvh] w-full items-center justify-center p-4 relative overflow-hidden font-sans bg-gradient-to-br from-[#E6DCC8] to-[#D5C7B3] text-[#4A3C31]">
+    <div className="min-h-screen w-full flex items-center justify-center p-4 md:p-8 relative overflow-hidden">
       
-      {/* 📜 Vintage Sketch Background Details */}
-      <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
-        <div className="absolute top-[-20%] left-[-10%] w-[70vw] h-[70vw] rounded-full mix-blend-multiply filter blur-[100px] bg-[#C1B2A6]"></div>
-        <div className="absolute bottom-[-10%] right-[-10%] w-[60vw] h-[60vw] rounded-full mix-blend-multiply filter blur-[100px] bg-[#E8E1D5]"></div>
-      </div>
+      {/* 🌟 Decorative Background Orbs */}
+      <div className="absolute top-[10%] left-[5%] w-64 h-64 bg-white/60 rounded-full blur-[80px] pointer-events-none"></div>
+      <div className="absolute bottom-[10%] right-[5%] w-80 h-80 bg-chatly-rose/20 rounded-full blur-[100px] pointer-events-none"></div>
 
-      <motion.div 
-        initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ type: "spring", damping: 25, stiffness: 200 }}
-        className="w-full max-w-md p-8 sm:p-10 flex flex-col relative z-10 bg-[#F9F6F0]/80 backdrop-blur-xl border border-[#C1B2A6]/50 shadow-[0_20px_50px_rgba(90,70,50,0.15)] rounded-3xl"
-      >
-        <div className="flex justify-center mb-6">
-          <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-[#8C7462] to-[#5A4535] flex items-center justify-center shadow-lg text-[#F9F6F0]">
-            <ShieldCheck size={32} strokeWidth={1.5} />
-          </div>
+      {/* 🧊 MAIN GLASS CARD */}
+      <div className="w-full max-w-[420px] bg-white/30 backdrop-blur-2xl border border-white/60 shadow-xl rounded-[3rem] p-6 sm:p-10 flex flex-col relative z-10">
+        
+        {/* Header / Logo */}
+        <div className="flex justify-center items-center gap-2 mb-8">
+          <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-chatly-dark">CHATLY</h1>
+          <span className="text-chatly-maroon text-2xl drop-shadow-sm">♥</span>
         </div>
 
-        <h1 className="text-3xl font-serif font-bold text-center mb-2 tracking-tight text-[#3A2D23]">Secure Portal</h1>
-        <p className="text-center text-[#7A6B5D] font-medium mb-8 text-sm">Encrypted communication channel.</p>
+        {/* 🎛️ Segmented Tabs */}
+        <div className="flex w-full bg-white/30 p-1.5 rounded-full mb-6 border border-white/40 shadow-inner">
+          <button 
+            onClick={() => {setAuthMode('phone'); setError(''); setConfirmationResult(null);}} 
+            className={`flex-1 py-3 text-[14px] sm:text-[15px] font-bold rounded-full transition-all duration-300 ${authMode === 'phone' ? 'bg-white shadow-sm text-chatly-maroon' : 'text-chatly-dark/60 hover:text-chatly-dark'}`}
+          >
+            Phone
+          </button>
+          <button 
+            onClick={() => {setAuthMode('email'); setError(''); setEmailStep('request');}} 
+            className={`flex-1 py-3 text-[14px] sm:text-[15px] font-bold rounded-full transition-all duration-300 ${authMode === 'email' ? 'bg-white shadow-sm text-chatly-maroon' : 'text-chatly-dark/60 hover:text-chatly-dark'}`}
+          >
+            Email
+          </button>
+        </div>
 
-        <AnimatePresence mode="wait">
-          {/* --- LOGIN MODE --- */}
-          {mode === 'login' && (
-            <motion.form key="login" initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 20 }} onSubmit={handleLogin} className="flex flex-col gap-5">
-              
-              <AnimatePresence>
-                {error && <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="bg-red-50 text-red-600 border border-red-200 px-4 py-3 rounded-xl text-xs font-bold flex items-center gap-2"><AlertCircle size={14} /> {error}</motion.div>}
-                {success && <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="bg-emerald-50 text-emerald-600 border border-emerald-200 px-4 py-3 rounded-xl text-xs font-bold flex items-center gap-2"><ShieldCheck size={14} /> {success}</motion.div>}
-              </AnimatePresence>
-
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-[#9E8E81]"><KeyRound size={18} /></div>
-                <input 
-                  type="text" value={accessId} onChange={(e) => setAccessId(e.target.value)} placeholder="Enter Access ID" disabled={loading}
-                  className="w-full bg-[#E8E1D5]/50 border border-[#C1B2A6] text-[#4A3C31] placeholder-[#9E8E81] rounded-xl pl-11 pr-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#8C7462]/50 focus:bg-[#F9F6F0] transition-all font-mono uppercase font-bold tracking-widest text-sm shadow-inner"
-                />
+        {/* ⚠️ Error Message Display */}
+        <AnimatePresence>
+          {error && (
+            <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} exit={{ opacity: 0, height: 0 }} className="w-full overflow-hidden mb-4">
+              <div className="bg-red-50/90 backdrop-blur-md text-red-600 text-[13px] font-bold p-3 rounded-2xl border border-red-200 text-center shadow-sm">
+                {error}
               </div>
-
-              <button type="submit" disabled={loading || !accessId.trim()} className="w-full bg-[#5A4535] hover:bg-[#423226] disabled:opacity-70 text-[#F9F6F0] font-bold py-3.5 rounded-xl shadow-md transition-colors flex items-center justify-center gap-2 mt-2">
-                {loading ? <Loader2 size={18} className="animate-spin" /> : "Authenticate"}
-              </button>
-
-              <div className="mt-4 text-center">
-                <button type="button" onClick={() => {setMode('request'); setError(""); setSuccess("");}} className="text-[13px] font-bold text-[#8C7462] hover:text-[#5A4535] transition-colors underline decoration-2 underline-offset-4 decoration-[#C1B2A6]">
-                  Request an Access ID
-                </button>
-              </div>
-            </motion.form>
-          )}
-
-          {/* --- REQUEST MODE --- */}
-          {mode === 'request' && (
-            <motion.form key="request" initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -20 }} onSubmit={handleRequestAccess} className="flex flex-col gap-4">
-              
-              <AnimatePresence>
-                {error && <motion.div initial={{ opacity: 0, height: 0 }} animate={{ opacity: 1, height: 'auto' }} className="bg-red-50 text-red-600 border border-red-200 px-4 py-3 rounded-xl text-xs font-bold flex items-center gap-2"><AlertCircle size={14} /> {error}</motion.div>}
-              </AnimatePresence>
-
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-[#9E8E81]"><User size={18} /></div>
-                <input 
-                  type="text" value={reqName} onChange={(e) => setReqName(e.target.value)} placeholder="Full Name" disabled={loading}
-                  className="w-full bg-[#E8E1D5]/50 border border-[#C1B2A6] text-[#4A3C31] placeholder-[#9E8E81] rounded-xl pl-11 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#8C7462]/50 focus:bg-[#F9F6F0] transition-all font-semibold text-sm shadow-inner"
-                />
-              </div>
-
-              <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none text-[#9E8E81]"><Mail size={18} /></div>
-                <input 
-                  type="email" value={reqEmail} onChange={(e) => setReqEmail(e.target.value)} placeholder="Email Address" disabled={loading}
-                  className="w-full bg-[#E8E1D5]/50 border border-[#C1B2A6] text-[#4A3C31] placeholder-[#9E8E81] rounded-xl pl-11 pr-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#8C7462]/50 focus:bg-[#F9F6F0] transition-all font-semibold text-sm shadow-inner"
-                />
-              </div>
-
-              <div className="flex items-start gap-3 mt-2 bg-[#E8E1D5]/40 p-3 rounded-xl border border-[#C1B2A6]/50">
-                <MapPin size={16} className="text-[#8C7462] flex-shrink-0 mt-0.5" />
-                <p className="text-[11px] font-medium text-[#7A6B5D] leading-relaxed">
-                  To verify your identity, your GPS location will be securely shared with the administrator upon requesting an ID.
-                </p>
-              </div>
-
-              <button type="submit" disabled={loading || !reqName.trim() || !reqEmail.trim()} className="w-full bg-[#5A4535] hover:bg-[#423226] disabled:opacity-70 text-[#F9F6F0] font-bold py-3.5 rounded-xl shadow-md transition-colors flex items-center justify-center gap-2 mt-2">
-                {loading ? <Loader2 size={18} className="animate-spin" /> : <><Send size={16}/> Submit Request</>}
-              </button>
-
-              <div className="mt-2 text-center">
-                <button type="button" onClick={() => {setMode('login'); setError("");}} className="text-[13px] font-bold text-[#8C7462] hover:text-[#5A4535] transition-colors flex items-center justify-center gap-1.5 mx-auto">
-                  <ArrowLeft size={14} /> Back to Login
-                </button>
-              </div>
-            </motion.form>
+            </motion.div>
           )}
         </AnimatePresence>
 
-      </motion.div>
+        {/* Form Container */}
+        <div className="w-full flex flex-col min-h-[140px]">
+          <AnimatePresence mode="wait">
+            
+            {/* 📱 PHONE FORM */}
+            {authMode === 'phone' && (
+              <motion.form key="phone" initial={{ opacity: 0, x: -10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 10 }} transition={{ duration: 0.2 }} onSubmit={confirmationResult ? handleVerifyPhoneOTP : handleSendPhoneOTP} className="flex flex-col gap-4">
+                
+                {!confirmationResult ? (
+                  <>
+                    <div className="flex items-center w-full bg-white/50 border border-white/60 rounded-full px-5 py-3.5 focus-within:bg-white/80 focus-within:border-chatly-maroon transition-all shadow-sm">
+                      <Phone className="text-chatly-maroon shrink-0" size={20} />
+                      <input 
+                        type="tel" value={phoneNumber} onChange={(e) => setPhoneNumber(e.target.value)} 
+                        placeholder="+1 234 567 8900" 
+                        className="flex-1 bg-transparent border-none outline-none ml-3 text-chatly-dark placeholder-chatly-dark/40 font-semibold text-[15px]" 
+                      />
+                    </div>
+                    <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-chatly-maroon to-chatly-rose hover:from-chatly-dark hover:to-chatly-maroon text-white font-bold py-3.5 rounded-full flex justify-center items-center gap-2 shadow-[0_4px_15px_rgba(167,111,111,0.3)] hover:shadow-lg transition-all transform hover:-translate-y-0.5 disabled:opacity-70 disabled:transform-none">
+                      {loading ? <Loader2 className="animate-spin" size={20} /> : <>Send Secure OTP <ArrowRight size={18} /></>}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center w-full bg-white/50 border border-white/60 rounded-full px-5 py-3.5 focus-within:bg-white/80 focus-within:border-chatly-maroon transition-all shadow-sm">
+                      <ShieldCheck className="text-chatly-maroon shrink-0" size={20} />
+                      <input 
+                        type="text" value={otp} onChange={(e) => setOtp(e.target.value)} 
+                        placeholder="6-Digit Code" 
+                        className="flex-1 bg-transparent border-none outline-none ml-3 text-chatly-dark placeholder-chatly-dark/40 font-bold tracking-widest text-lg" 
+                      />
+                    </div>
+                    <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-chatly-maroon to-chatly-rose hover:from-chatly-dark hover:to-chatly-maroon text-white font-bold py-3.5 rounded-full flex justify-center items-center shadow-[0_4px_15px_rgba(167,111,111,0.3)] hover:shadow-lg transition-all transform hover:-translate-y-0.5 disabled:opacity-70 disabled:transform-none">
+                      {loading ? <Loader2 className="animate-spin" size={20} /> : "Verify & Connect"}
+                    </button>
+                  </>
+                )}
+                
+                {/* Invisible Recaptcha required by Firebase */}
+                <div id="recaptcha-container"></div>
+              </motion.form>
+            )}
+
+            {/* ✉️ EMAIL FORM */}
+            {authMode === 'email' && (
+              <motion.form key="email" initial={{ opacity: 0, x: 10 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -10 }} transition={{ duration: 0.2 }} onSubmit={emailStep === 'request' ? handleSendEmailOTP : handleVerifyEmailOTP} className="flex flex-col gap-4">
+                
+                {emailStep === 'request' ? (
+                  <>
+                    <div className="flex items-center w-full bg-white/50 border border-white/60 rounded-full px-5 py-3.5 focus-within:bg-white/80 focus-within:border-chatly-maroon transition-all shadow-sm">
+                      <Mail className="text-chatly-maroon shrink-0" size={20} />
+                      <input 
+                        type="email" value={email} onChange={(e) => setEmail(e.target.value)} 
+                        placeholder="hello@example.com" 
+                        className="flex-1 bg-transparent border-none outline-none ml-3 text-chatly-dark placeholder-chatly-dark/40 font-semibold text-[15px]" 
+                      />
+                    </div>
+                    <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-chatly-maroon to-chatly-rose hover:from-chatly-dark hover:to-chatly-maroon text-white font-bold py-3.5 rounded-full flex justify-center items-center gap-2 shadow-[0_4px_15px_rgba(167,111,111,0.3)] hover:shadow-lg transition-all transform hover:-translate-y-0.5 disabled:opacity-70 disabled:transform-none">
+                      {loading ? <Loader2 className="animate-spin" size={20} /> : <>Send Email Code <ArrowRight size={18} /></>}
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div className="flex items-center w-full bg-white/50 border border-white/60 rounded-full px-5 py-3.5 focus-within:bg-white/80 focus-within:border-chatly-maroon transition-all shadow-sm">
+                      <ShieldCheck className="text-chatly-maroon shrink-0" size={20} />
+                      <input 
+                        type="text" value={emailOtp} onChange={(e) => setEmailOtp(e.target.value)} 
+                        placeholder="6-Digit Code" 
+                        className="flex-1 bg-transparent border-none outline-none ml-3 text-chatly-dark placeholder-chatly-dark/40 font-bold tracking-widest text-lg" 
+                      />
+                    </div>
+                    <button type="submit" disabled={loading} className="w-full bg-gradient-to-r from-chatly-maroon to-chatly-rose hover:from-chatly-dark hover:to-chatly-maroon text-white font-bold py-3.5 rounded-full flex justify-center items-center shadow-[0_4px_15px_rgba(167,111,111,0.3)] hover:shadow-lg transition-all transform hover:-translate-y-0.5 disabled:opacity-70 disabled:transform-none">
+                      {loading ? <Loader2 className="animate-spin" size={20} /> : "Verify & Connect"}
+                    </button>
+                  </>
+                )}
+              </motion.form>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Divider */}
+        <div className="flex items-center w-full my-8 gap-4 opacity-50">
+          <div className="flex-1 h-px bg-chatly-dark/40"></div>
+          <span className="text-[11px] font-extrabold text-chatly-dark uppercase tracking-widest">Or continue with</span>
+          <div className="flex-1 h-px bg-chatly-dark/40"></div>
+        </div>
+
+        {/* Google Button */}
+        <button 
+          onClick={handleGoogleLogin} 
+          disabled={loading} 
+          className="flex items-center justify-center gap-3 w-full bg-white/50 hover:bg-white/80 border border-white/60 py-3.5 rounded-full font-bold text-chatly-dark shadow-sm transition-all transform hover:-translate-y-0.5 disabled:opacity-70 disabled:transform-none"
+        >
+          {/* Hardcoded Dimensions (22x22) to prevent CSS crashing */}
+          <svg width="22" height="22" viewBox="0 0 24 24" className="shrink-0">
+            <path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" />
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+          </svg>
+          Sign in with Google
+        </button>
+
+      </div>
     </div>
   );
 }

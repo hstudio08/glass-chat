@@ -1,7 +1,8 @@
-import { initializeApp } from "firebase/app";
-import { getFirestore } from "firebase/firestore";
-import { getAuth, GoogleAuthProvider } from "firebase/auth"; // Added GoogleAuthProvider
+import { initializeApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import { initializeFirestore } from 'firebase/firestore'; 
 
+// Replace these with your actual Firebase keys!
 const firebaseConfig = {
   apiKey: "AIzaSyASpc86EM61keqZDLR9EEpMf6aSsqKV3Ik",
   authDomain: "as-creators-final.firebaseapp.com",
@@ -12,6 +13,12 @@ const firebaseConfig = {
 };
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+
+// 🛡️ THE FIX: Let Firebase Auto-Detect the best network protocol 
+// to prevent QUIC errors and 400 Bad Requests on strict networks.
+export const db = initializeFirestore(app, {
+  experimentalAutoDetectLongPolling: true,
+});
+
 export const auth = getAuth(app);
-export const googleProvider = new GoogleAuthProvider(); // Export the provider
+export const googleProvider = new GoogleAuthProvider();

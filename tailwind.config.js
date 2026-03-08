@@ -2,13 +2,18 @@
 export default {
   content: [
     "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}", 
+    "./src/**/*.{js,ts,jsx,tsx}",
   ],
   theme: {
     extend: {
       colors: {
-        glass: "rgba(255, 255, 255, 0.25)",
-        glassBorder: "rgba(255, 255, 255, 0.18)",
+        chatly: {
+          dark: '#4a3a3a',      // Primary text
+          maroon: '#a76f6f',    // Buttons & Icons
+          rose: '#c67b7b',      // Gradients
+          peach: '#fdf2f0',     // Background highlights
+          green: '#5ba574',     // Online badge
+        }
       }
     },
   },

@@ -3,11 +3,46 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, viewport-fit=cover" />
-    <title>glass-chat</title>
+    
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <meta name="theme-color" content="#fdf2f0" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="Chatly" />
+    <link rel="apple-touch-icon" href="/vite.svg">
+    <link rel="manifest" href="/manifest.json" />
+
+    <title>Chatly | Best Random Chatting Platform & Free Chatting Online</title>
+    <meta name="title" content="Chatly | Best Random Chatting Platform & Free Chatting Online">
+    <meta name="description" content="Join Chatly, the best random chatting platform. Enjoy free chatting online with high-quality voice and video calls. Experience 100% secure chatting with end-to-end encryption.">
+    <meta name="keywords" content="best random chatting platform, free chatting online, secure chatting, anonymous chat, video call, P2P chat, secure messaging app, Chatly">
+    <meta name="author" content="Chatly Web">
+    <meta name="robots" content="index, follow">
+
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="https://www.your-chatly-domain.com/">
+    <meta property="og:title" content="Chatly | Secure & Free Chatting Online">
+    <meta property="og:description" content="Join the best random chatting platform. Enjoy ultra-fast text, voice, and P2P video calls in a 100% secure environment.">
+    <meta property="og:image" content="/seo-banner.jpg">
+
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="https://www.your-chatly-domain.com/">
+    <meta property="twitter:title" content="Chatly | Secure & Free Chatting Online">
+    <meta property="twitter:description" content="Join the best random chatting platform. Enjoy ultra-fast text, voice, and P2P video calls in a 100% secure environment.">
+    <meta property="twitter:image" content="/seo-banner.jpg">
+    
+    <link rel="canonical" href="https://www.your-chatly-domain.com/" />
   </head>
   <body>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
+    
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW setup failed', err));
+        });
+      }
+    </script>
   </body>
 </html>

@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# Point Google to your newly created sitemap
+Sitemap: https://www.your-chatly-domain.com/sitemap.xml

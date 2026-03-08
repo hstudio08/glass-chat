@@ -1,0 +1,16 @@
+{
+  "name": "Chatly Messenger",
+  "short_name": "Chatly",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fdf2f0",
+  "theme_color": "#fdf2f0",
+  "orientation": "portrait",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "192x192 512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}

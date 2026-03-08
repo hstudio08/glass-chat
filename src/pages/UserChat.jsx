@@ -1,9 +1,13 @@
-import { useState, useEffect, useRef } from 'react';
-import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, updateDoc, getDoc } from 'firebase/firestore';
-import { Send, LogOut, ShieldCheck, Lock, WifiOff, ChevronDown, CheckCheck, Check, Clock, Image as ImageIcon, Loader2, Maximize, X, Sparkles, AlertCircle, UserCircle, Reply, Video, PhoneIncoming, PhoneOff } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { collection, addDoc, query, orderBy, onSnapshot, serverTimestamp, doc, setDoc, updateDoc, getDoc, where, deleteDoc } from 'firebase/firestore';
+// ✅ FIXED: Sparkles and ChevronDown are now properly imported!
+import { Send, LogOut, Lock, WifiOff, CheckCheck, Check, Clock, Loader2, Maximize, X, Reply, Video, PhoneIncoming, PhoneOff, Phone, Paperclip, Smile, Mic, MessageSquarePlus, MoreVertical, Search, ArrowLeft, Camera, Settings, Bell, Palette, CheckCircle, Trash2, Image as ImageIcon, FileText, User as UserIcon, Sparkles, ChevronDown } from 'lucide-react';
 import { db } from '../services/firebase';
 import { motion, AnimatePresence } from 'framer-motion';
+import EmojiPicker from 'emoji-picker-react';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+
+// Imports from your project structure
 import NativeVideoCall from '../components/NativeVideoCall'; 
 import Login from './Login';
 
@@ -11,40 +15,75 @@ const IMGBB_API_KEY = '250588b8b03b100c08b3df82baaa28a4';
 const GEMINI_API_KEY = 'AIzaSyCzWUVmeJ1NE_8D_JmQQrFQv4elA1zS2iA';
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
-const animTween = { type: "tween", ease: "easeOut", duration: 0.25 };
-const fadeUp = { hidden: { opacity: 0, y: 15 }, visible: { opacity: 1, y: 0, transition: animTween } };
-
+const animTween = { type: "tween", ease: "easeOut", duration: 0.2 };
+const fadeUp = { hidden: { opacity: 0, y: 10 }, visible: { opacity: 1, y: 0, transition: animTween } };
 const RING_TONE = new Audio('https://actions.google.com/sounds/v1/alarms/phone_ringing.ogg');
 RING_TONE.loop = true;
 
+// 🎨 THEME ENGINE 
+const themes = {
+  whatsappLight: {
+    name: 'WhatsApp Light',
+    bgApp: 'bg-[#d1d7db]', bgMain: 'bg-[#efeae2]', bgSidebar: 'bg-white', bgHeader: 'bg-[#f0f2f5]',
+    textMain: 'text-[#111b21]', textMuted: 'text-[#54656f]', primary: 'bg-[#00a884]',
+    bubbleOut: 'bg-[#d9fdd3]', bubbleIn: 'bg-white',
+  },
+  telegramNight: {
+    name: 'Telegram Night',
+    bgApp: 'bg-[#0f0f0f]', bgMain: 'bg-[#0f0f0f]', bgSidebar: 'bg-[#17212b]', bgHeader: 'bg-[#17212b]',
+    textMain: 'text-white', textMuted: 'text-[#7f91a4]', primary: 'bg-[#3390ec]',
+    bubbleOut: 'bg-[#2b5278]', bubbleIn: 'bg-[#182533]',
+  },
+  oledMatrix: {
+    name: 'OLED Matrix',
+    bgApp: 'bg-black', bgMain: 'bg-black', bgSidebar: 'bg-black', bgHeader: 'bg-[#0a0a0a]',
+    textMain: 'text-[#00ff41]', textMuted: 'text-[#008f11]', primary: 'bg-[#003b00]',
+    bubbleOut: 'bg-[#001a00]', bubbleIn: 'bg-[#0a0a0a]',
+  }
+};
+
 export default function UserChat() {
-  const [chatId, setChatId] = useState(null); 
+  // --- GLOBAL STATE ---
+  const [myPhoneNumber, setMyPhoneNumber] = useState(null); 
+  const [activeRoom, setActiveRoom] = useState(null); 
+  const [activeRoomDoc, setActiveRoomDoc] = useState(null);
+  
+  // --- THEME STATE ---
+  const [activeThemeKey, setActiveThemeKey] = useState('whatsappLight');
+  const theme = themes[activeThemeKey];
+
+  // --- SIDEBAR STATE ---
+  const [activePanel, setActivePanel] = useState('chats'); // 'chats', 'profile', 'settings', 'newChat'
+  const [chatList, setChatList] = useState([]); 
+  const [searchQuery, setSearchQuery] = useState(""); 
+  
+  // ✅ FIXED: Initial state now has a default placeholder to prevent empty src errors
+  const [userProfile, setUserProfile] = useState({ name: "", bio: "", avatar: "https://i.pravatar.cc/150?img=placeholder" });
+  
+  const [isSavingProfile, setIsSavingProfile] = useState(false);
+  const [newChatPhone, setNewChatPhone] = useState(""); 
+  const [newChatName, setNewChatName] = useState("");
+  const [isStartingChat, setIsStartingChat] = useState(false);
+  const [newChatError, setNewChatError] = useState("");
+
+  // --- CHAT AREA STATE ---
   const [messages, setMessages] = useState([]);
   const [newMessage, setNewMessage] = useState("");
-  const [isAdminTyping, setIsAdminTyping] = useState(false);
-  
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [showChatOptions, setShowChatOptions] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
   const [aiReplies, setAiReplies] = useState([]);
   const [showAIReplies, setShowAIReplies] = useState(false);
   const [pendingImage, setPendingImage] = useState(null);
   const [previewUrl, setPreviewUrl] = useState(null);
-  const [compressImage, setCompressImage] = useState(true);
   const [selectedImage, setSelectedImage] = useState(null);
   const [replyingToId, setReplyingToId] = useState(null);
-  
-  const [isOffline, setIsOffline] = useState(!navigator.onLine);
-  const [isLoggingOut, setIsLoggingOut] = useState(false);
-  const [showScrollButton, setShowScrollButton] = useState(false);
-  const [connectionError, setConnectionError] = useState("");
-
-  const [showProfile, setShowProfile] = useState(false);
-  const [userProfile, setUserProfile] = useState({ name: "", bio: "", avatar: "" });
-  const [isSavingProfile, setIsSavingProfile] = useState(false);
-  
   const [videoCallState, setVideoCallState] = useState(null); 
+  const [isOffline, setIsOffline] = useState(!navigator.onLine);
+  const [showScrollButton, setShowScrollButton] = useState(false);
 
-  // ✅ ERROR RECTIFIED: Restored the missing reference here
   const messagesEndRef = useRef(null); 
   const chatContainerRef = useRef(null);
   const textareaRef = useRef(null);
@@ -52,46 +91,87 @@ export default function UserChat() {
   const avatarInputRef = useRef(null);
   const previousMessageCount = useRef(0);
 
+  // Load Saved Theme
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('appTheme');
+    if (savedTheme && themes[savedTheme]) setActiveThemeKey(savedTheme);
+  }, []);
+
+  const changeTheme = (key) => {
+    setActiveThemeKey(key);
+    localStorage.setItem('appTheme', key);
+  };
+
+  // Global Listeners
   useEffect(() => {
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') { setSelectedImage(null); setShowProfile(false); }
+    const handleKeyDown = (e) => { 
+      if (e.key === 'Escape') { 
+        setSelectedImage(null); setActivePanel('chats'); setShowEmojiPicker(false); setShowAttachMenu(false); setShowChatOptions(false);
+      } 
     };
     window.addEventListener('online', handleOnline); 
     window.addEventListener('offline', handleOffline);
     window.addEventListener('keyup', handleKeyDown);
     return () => {
-      window.removeEventListener('online', handleOnline); 
-      window.removeEventListener('offline', handleOffline);
-      window.removeEventListener('keyup', handleKeyDown);
+      window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); window.removeEventListener('keyup', handleKeyDown);
     };
-  }, [selectedImage]);
+  }, []);
 
+  // Fetch Profile & Chat List
   useEffect(() => {
-    if (!chatId) return;
-    setConnectionError("");
+    if (!myPhoneNumber) return;
     
-    getDoc(doc(db, 'chats', chatId)).then(docSnap => {
-      if (docSnap.exists() && docSnap.data().userProfile) setUserProfile(docSnap.data().userProfile);
+    const unsubProfile = onSnapshot(doc(db, 'users', myPhoneNumber), (docSnap) => {
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        setUserProfile({ name: data.name || "", bio: data.bio || "Hey there! I am using WhatsApp.", avatar: data.avatar || "https://i.pravatar.cc/150?img=placeholder" });
+      }
     });
 
-    const unsubscribeMessages = onSnapshot(query(collection(db, 'chats', chatId, 'messages'), orderBy('timestamp', 'asc')), (snapshot) => {
+    const q = query(collection(db, 'rooms'), where('participants', 'array-contains', myPhoneNumber));
+    const unsubscribeChats = onSnapshot(q, (snapshot) => {
+      const chats = snapshot.docs.map(doc => {
+        const data = doc.data();
+        const otherId = data.participants.find(p => p !== myPhoneNumber);
+        return {
+          roomId: doc.id,
+          otherId: otherId,
+          name: data.names?.[myPhoneNumber] || otherId || "Unknown",
+          lastMessage: data.lastMessage || "Start chatting",
+          timestamp: data.lastUpdated
+        };
+      });
+      chats.sort((a, b) => (b.timestamp?.toMillis() || 0) - (a.timestamp?.toMillis() || 0));
+      setChatList(chats);
+    });
+
+    return () => { unsubProfile(); unsubscribeChats(); }
+  }, [myPhoneNumber]);
+
+  // Fetch Active Room Messages
+  useEffect(() => {
+    setShowAIReplies(false); setAiReplies([]);
+    if (!activeRoom) { setMessages([]); setActiveRoomDoc(null); return; }
+    
+    const q = query(collection(db, 'rooms', activeRoom, 'messages'), orderBy('timestamp', 'asc'));
+    const unsubscribeMessages = onSnapshot(q, (snapshot) => {
       const fetchedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setMessages(fetchedMessages);
       if (previousMessageCount.current !== 0 && fetchedMessages.length > previousMessageCount.current) {
-        if (fetchedMessages[fetchedMessages.length - 1]?.sender === 'admin') setShowAIReplies(false);
+        if (fetchedMessages[fetchedMessages.length - 1]?.senderId !== myPhoneNumber) setShowAIReplies(false);
       }
       previousMessageCount.current = fetchedMessages.length;
       setTimeout(() => scrollToBottom('auto'), 100);
-    }, () => setConnectionError("Secure connection lost."));
+    });
 
-    const unsubscribeDoc = onSnapshot(doc(db, 'chats', chatId), (docSnap) => {
+    const unsubscribeDoc = onSnapshot(doc(db, 'rooms', activeRoom), (docSnap) => {
       if (docSnap.exists()) {
         const data = docSnap.data();
-        setIsAdminTyping(data.adminTyping || false);
+        setActiveRoomDoc(data);
         if (data.activeCall) {
-          if (data.activeCall.status === 'ringing' && data.activeCall.caller === 'admin') {
+          if (data.activeCall.status === 'ringing' && data.activeCall.caller !== myPhoneNumber) {
             RING_TONE.play().catch(()=>{});
             setVideoCallState({ roomId: data.activeCall.roomId, isIncoming: true });
           } else if (data.activeCall.status === 'ended' || data.activeCall.status === 'rejected') {
@@ -102,411 +182,570 @@ export default function UserChat() {
     });
 
     return () => { unsubscribeMessages(); unsubscribeDoc(); previousMessageCount.current = 0; RING_TONE.pause(); };
-  }, [chatId]);
+  }, [activeRoom, myPhoneNumber]);
 
+  // Read Receipts
   useEffect(() => {
-    if (!chatId) return;
+    if (!activeRoom) return;
     const hasFocus = document.hasFocus();
     messages.forEach(msg => {
-      if (msg.sender === 'admin') {
-        if (hasFocus && msg.status !== 'seen') updateDoc(doc(db, 'chats', chatId, 'messages', msg.id), { status: 'seen' }).catch(()=>{});
-        else if (!hasFocus && msg.status === 'sent') updateDoc(doc(db, 'chats', chatId, 'messages', msg.id), { status: 'delivered' }).catch(()=>{});
+      if (msg.senderId !== myPhoneNumber) {
+        if (hasFocus && msg.status !== 'seen') updateDoc(doc(db, 'rooms', activeRoom, 'messages', msg.id), { status: 'seen' }).catch(()=>{});
+        else if (!hasFocus && msg.status === 'sent') updateDoc(doc(db, 'rooms', activeRoom, 'messages', msg.id), { status: 'delivered' }).catch(()=>{});
       }
     });
-  }, [messages, chatId]);
+  }, [messages, activeRoom, myPhoneNumber]);
 
-  useEffect(() => {
-    const handleFocus = () => {
-      if (!chatId) return;
-      messages.forEach(msg => {
-        if (msg.sender === 'admin' && msg.status !== 'seen') updateDoc(doc(db, 'chats', chatId, 'messages', msg.id), { status: 'seen' }).catch(()=>{});
-      });
-    };
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [messages, chatId]);
+  const handleStartNewChat = async (e) => {
+    e.preventDefault();
+    setNewChatError("");
+    if (!newChatPhone.trim() || !newChatName.trim()) return;
+    const friendPhone = newChatPhone.trim();
+    if (friendPhone === myPhoneNumber) return setNewChatError("You cannot chat with yourself.");
 
-  useEffect(() => {
-    if (!chatId) return;
-    const setOnline = () => setDoc(doc(db, 'chats', chatId), { userOnline: true }, { merge: true }).catch(()=>{});
-    const setOffline = () => setDoc(doc(db, 'chats', chatId), { userOnline: false, userLastSeen: serverTimestamp() }, { merge: true }).catch(()=>{});
-    setOnline();
-    const handleVisibility = () => document.visibilityState === 'visible' ? setOnline() : setOffline();
-    window.addEventListener('visibilitychange', handleVisibility); window.addEventListener('beforeunload', setOffline);
-    return () => { setOffline(); window.removeEventListener('visibilitychange', handleVisibility); window.removeEventListener('beforeunload', setOffline); };
-  }, [chatId]);
-
-  const scrollToBottom = (behavior = 'smooth') => { 
-    if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTo({
-        top: chatContainerRef.current.scrollHeight,
-        behavior: behavior === 'smooth' ? 'smooth' : 'auto'
-      });
-    }
-  };
-
-  const handleScroll = (e) => setShowScrollButton(e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight > 100);
-  const handleInputFocus = () => { if (chatId) setDoc(doc(db, 'chats', chatId), { userTyping: true }, { merge: true }).catch(()=>{}); };
-  const handleInputBlur = () => { if (chatId) setDoc(doc(db, 'chats', chatId), { userTyping: false }, { merge: true }).catch(()=>{}); };
-
-  const initiateCall = async () => {
-    if (!chatId) return;
-    const roomId = `vault-${Date.now()}`;
-    await updateDoc(doc(db, 'chats', chatId), { activeCall: { caller: 'user', status: 'ringing', roomId: roomId } });
-    setVideoCallState({ roomId, isIncoming: false });
-  };
-  const acceptCall = async () => { RING_TONE.pause(); if (videoCallState?.roomId) { await updateDoc(doc(db, 'chats', chatId), { 'activeCall.status': 'in-progress' }); setVideoCallState({ ...videoCallState, isIncoming: false }); } };
-  const rejectCall = async () => { RING_TONE.pause(); await updateDoc(doc(db, 'chats', chatId), { 'activeCall.status': 'rejected' }); setVideoCallState(null); };
-  const endCallFirebase = async () => { await updateDoc(doc(db, 'chats', chatId), { activeCall: null }); setVideoCallState(null); };
-
-  const generateAIQuickReplies = async () => {
-    if (showAIReplies && aiReplies.length > 0) { setShowAIReplies(false); return; }
-    setIsGeneratingAI(true); setShowAIReplies(true); setAiReplies([]);
+    setIsStartingChat(true);
     try {
-      const recentMessages = messages.slice(-3);
-      if (recentMessages.length === 0) { setAiReplies(["Hello!", "How can I help?", "I have a question."]); return setIsGeneratingAI(false); }
-      const waitingOnSupport = recentMessages[recentMessages.length - 1].sender === 'user';
-      const transcript = recentMessages.map(m => `${m.sender === 'user' ? 'Me' : 'Support'}:${m.isImage ? '[Img]' : m.text}`).join('|');
-      const prompt = `Context:${transcript}|Task:Return JSON array of exactly 3 short ${waitingOnSupport ? 'follow-up questions' : 'answers'}. Max 4 words each.`;
-      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite", generationConfig: { responseMimeType: "application/json", maxOutputTokens: 50 } });
-      const result = await model.generateContent(prompt);
-      setAiReplies(JSON.parse(result.response.text()).slice(0,3));
-    } catch (error) { setAiReplies(["Yes.", "Could you elaborate?", "Thank you."]); } finally { setIsGeneratingAI(false); }
-  };
-
-  const handleImageSelect = (e) => { const file = e.target.files[0]; if (!file) return; setPendingImage(file); setPreviewUrl(URL.createObjectURL(file)); e.target.value = null; };
-
-  const handleSendText = async (e, overrideText = null) => {
-    if (e) e.preventDefault();
-    const textToSend = overrideText || newMessage.trim();
-    if (!textToSend && !pendingImage) return; 
-    if (!chatId || isOffline || isUploading) return;
-    
-    const currentImg = pendingImage; const currentText = textToSend; const currentReply = replyingToId;
-    setNewMessage(""); setPendingImage(null); setPreviewUrl(null); setShowAIReplies(false); setConnectionError(""); setReplyingToId(null);
-    if (textareaRef.current) textareaRef.current.style.height = '48px';
-    scrollToBottom('auto'); 
-    
-    setIsUploading(true);
-    setDoc(doc(db, 'chats', chatId), { userTyping: false }, { merge: true }).catch(()=>{});
-    
-    try {
-      if (currentImg) {
-        let base64Image = "";
-        if (compressImage) {
-          const img = new Image(); img.src = URL.createObjectURL(currentImg);
-          await new Promise((resolve) => {
-            img.onload = () => {
-              const canvas = document.createElement('canvas');
-              const scaleSize = Math.min(1200 / img.width, 1);
-              canvas.width = img.width * scaleSize; canvas.height = img.height * scaleSize;
-              canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-              base64Image = canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
-              resolve();
-            };
-          });
-        } else {
-          const reader = new FileReader();
-          await new Promise(resolve => { reader.onload = (event) => { base64Image = event.target.result.split(',')[1]; resolve(); }; reader.readAsDataURL(currentImg); });
-        }
-        const formData = new FormData(); formData.append('image', base64Image);
-        const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
-        const json = await res.json();
-        if (!json.success) throw new Error("Upload Failed");
-        await addDoc(collection(db, 'chats', chatId, 'messages'), { text: json.data.url, isImage: true, sender: "user", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
+      const friendDoc = await getDoc(doc(db, 'users', friendPhone));
+      if (!friendDoc.exists()) {
+        setNewChatError("User with this Phone Number does not exist.");
+        setIsStartingChat(false); return;
       }
-      if (currentText) {
-        await addDoc(collection(db, 'chats', chatId, 'messages'), { text: currentText, isImage: false, sender: "user", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
-      }
-      scrollToBottom('auto');
-    } catch (err) { setConnectionError("Delivery Failed."); } finally { setIsUploading(false); }
+      const friendData = friendDoc.data();
+      const roomId = [myPhoneNumber, friendPhone].sort().join('_');
+
+      await setDoc(doc(db, 'rooms', roomId), {
+        participants: [myPhoneNumber, friendPhone],
+        names: { [myPhoneNumber]: newChatName.trim(), [friendPhone]: userProfile.name || myPhoneNumber },
+        lastUpdated: serverTimestamp()
+      }, { merge: true });
+
+      setActiveRoom(roomId); setActivePanel('chats'); setNewChatPhone(""); setNewChatName("");
+    } catch (err) { setNewChatError("Failed to start chat."); } 
+    finally { setIsStartingChat(false); }
   };
 
   const handleSaveProfile = async () => {
     setIsSavingProfile(true);
-    try { await setDoc(doc(db, 'chats', chatId), { userProfile }, { merge: true }); setShowProfile(false); } 
-    catch (err) { alert("Failed to save profile."); } finally { setIsSavingProfile(false); }
+    try { 
+      await setDoc(doc(db, 'users', myPhoneNumber), { name: userProfile.name || myPhoneNumber, bio: userProfile.bio || "Available" }, { merge: true }); 
+      setActivePanel('chats'); 
+    } catch (err) { alert("Failed to update profile."); } 
+    finally { setIsSavingProfile(false); }
   };
 
   const handleAvatarUpload = async (e) => {
     const file = e.target.files[0]; if (!file) return;
     setIsSavingProfile(true); 
     try {
-      const img = new Image(); img.src = URL.createObjectURL(file);
-      await new Promise(resolve => {
-        img.onload = () => {
-          const canvas = document.createElement('canvas');
-          const scaleSize = Math.min(400 / img.width, 1);
-          canvas.width = img.width * scaleSize; canvas.height = img.height * scaleSize;
-          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL('image/jpeg', 0.6).split(',')[1]);
-        };
-      }).then(async (base64) => {
-        const formData = new FormData(); formData.append('image', base64);
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = async () => {
+        try {
+          const base64Image = reader.result.split(',')[1];
+          const formData = new FormData(); formData.append('image', base64Image);
+          const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
+          const json = await res.json();
+          if(json.success) await setDoc(doc(db, 'users', myPhoneNumber), { avatar: json.data.url }, { merge: true });
+        } catch(err) {} finally { setIsSavingProfile(false); if(avatarInputRef.current) avatarInputRef.current.value = ""; }
+      };
+    } catch (err) { setIsSavingProfile(false); }
+  };
+
+  const handleSendText = async (e, overrideText = null) => {
+    if (e) e.preventDefault();
+    const textToSend = overrideText || newMessage.trim();
+    if (!textToSend && !pendingImage) return; 
+    if (!activeRoom || isOffline || isUploading) return;
+    
+    const currentImg = pendingImage; const currentText = textToSend; const currentReply = replyingToId;
+    setNewMessage(""); setPendingImage(null); setPreviewUrl(null); setShowAIReplies(false); setShowEmojiPicker(false); setShowAttachMenu(false); setReplyingToId(null);
+    if (textareaRef.current) textareaRef.current.style.height = '42px';
+    scrollToBottom('auto'); 
+    
+    setIsUploading(true);
+    updateDoc(doc(db, 'rooms', activeRoom), { userTyping: false }).catch(()=>{});
+    
+    try {
+      let finalImageUrl = null;
+      if (currentImg) {
+        const reader = new FileReader();
+        await new Promise((resolve) => { reader.onload = (ev) => resolve(ev.target.result.split(',')[1]); reader.readAsDataURL(currentImg); })
+        .then(async (base64Image) => {
+          const formData = new FormData(); formData.append('image', base64Image);
+          const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
+          const json = await res.json();
+          if (json.success) finalImageUrl = json.data.url;
+        });
+      }
+
+      await addDoc(collection(db, 'rooms', activeRoom, 'messages'), { 
+        text: finalImageUrl || currentText, isImage: !!finalImageUrl, senderId: myPhoneNumber, timestamp: serverTimestamp(), status: "sent", replyToId: currentReply 
+      });
+      await updateDoc(doc(db, 'rooms', activeRoom), { lastMessage: !!finalImageUrl ? "📷 Photo" : currentText, lastUpdated: serverTimestamp() });
+      scrollToBottom('auto');
+    } catch (err) {} finally { setIsUploading(false); }
+  };
+
+  const handleImageUpload = async (e) => {
+    const file = e.target.files[0]; if (!file) return;
+    setShowAttachMenu(false); setIsUploading(true);
+    try {
+      const reader = new FileReader();
+      reader.readAsDataURL(file);
+      reader.onload = async () => {
+        const base64Image = reader.result.split(',')[1];
+        const formData = new FormData(); formData.append('image', base64Image);
         const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
         const json = await res.json();
-        setUserProfile({...userProfile, avatar: json.data.url});
-      });
-    } catch (err) { alert("Avatar upload failed"); } 
-    finally { setIsSavingProfile(false); if(avatarInputRef.current) avatarInputRef.current.value = ""; }
+        if (json.success) {
+          await addDoc(collection(db, 'rooms', activeRoom, 'messages'), { text: json.data.url, isImage: true, senderId: myPhoneNumber, timestamp: serverTimestamp(), status: "sent" });
+          await updateDoc(doc(db, 'rooms', activeRoom), { lastMessage: "📷 Photo", lastUpdated: serverTimestamp() });
+        }
+        setIsUploading(false); scrollToBottom('auto');
+      };
+    } catch (err) { setIsUploading(false); }
   };
 
-  const handleLogout = () => {
-    setIsLoggingOut(true);
-    if (chatId) setDoc(doc(db, 'chats', chatId), { userTyping: false }, { merge: true }).catch(()=>{});
-    setTimeout(() => { setChatId(null); setMessages([]); setIsLoggingOut(false); }, 300); 
+  const clearChat = () => {
+    if (window.confirm("Clear all messages for everyone?")) {
+      messages.forEach(msg => deleteDoc(doc(db, 'rooms', activeRoom, 'messages', msg.id)));
+      setShowChatOptions(false);
+    }
   };
 
-  const formatTime = (ts) => ts && typeof ts.toDate === 'function' ? new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit' }).format(ts.toDate()) : "";
+  const generateAIQuickReplies = async () => {
+    if (showAIReplies && aiReplies.length > 0) { setShowAIReplies(false); return; }
+    setIsGeneratingAI(true); setShowAIReplies(true); setAiReplies([]);
+    try {
+      const recentMessages = messages.slice(-3);
+      if (recentMessages.length === 0) { setAiReplies(["Hello!", "How are you?", "What's up?"]); return setIsGeneratingAI(false); }
+      const waitingOnSupport = recentMessages[recentMessages.length - 1].senderId === myPhoneNumber;
+      const transcript = recentMessages.map(m => `${m.senderId === myPhoneNumber ? 'Me' : 'Them'}:${m.isImage ? '[Img]' : m.text}`).join('|');
+      const prompt = `Context:${transcript}|Task:Return JSON array of exactly 3 short friendly ${waitingOnSupport ? 'follow-up questions' : 'answers'}. Max 4 words each.`;
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite", generationConfig: { responseMimeType: "application/json", maxOutputTokens: 50 } });
+      const result = await model.generateContent(prompt);
+      setAiReplies(JSON.parse(result.response.text()).slice(0,3));
+    } catch (error) { setAiReplies(["Yes.", "Could you elaborate?", "Thank you."]); } finally { setIsGeneratingAI(false); }
+  };
+
+  const initiateCall = async () => {
+    if (!activeRoom) return;
+    const roomId = `call-${Date.now()}`;
+    await updateDoc(doc(db, 'rooms', activeRoom), { activeCall: { caller: myPhoneNumber, status: 'ringing', roomId: roomId } });
+    setVideoCallState({ roomId, isIncoming: false });
+  };
+  const acceptCall = async () => { RING_TONE.pause(); if (videoCallState?.roomId) { await updateDoc(doc(db, 'rooms', activeRoom), { 'activeCall.status': 'in-progress' }); setVideoCallState({ ...videoCallState, isIncoming: false }); } };
+  const rejectCall = async () => { RING_TONE.pause(); await updateDoc(doc(db, 'rooms', activeRoom), { 'activeCall.status': 'rejected' }); setVideoCallState(null); };
+  const endCallFirebase = async () => { await updateDoc(doc(db, 'rooms', activeRoom), { activeCall: null }); setVideoCallState(null); };
+
+  const scrollToBottom = (behavior = 'smooth') => { if (chatContainerRef.current) { chatContainerRef.current.scrollTo({ top: chatContainerRef.current.scrollHeight, behavior }); } };
+  const handleScroll = (e) => setShowScrollButton(e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight > 100);
+  const handleInputFocus = () => { if (activeRoom) updateDoc(doc(db, 'rooms', activeRoom), { userTyping: true, typingId: myPhoneNumber }).catch(()=>{}); };
+  const handleInputBlur = () => { if (activeRoom) updateDoc(doc(db, 'rooms', activeRoom), { userTyping: false }).catch(()=>{}); };
+  const handleImageSelect = (e) => { const file = e.target.files[0]; if (!file) return; setPendingImage(file); setPreviewUrl(URL.createObjectURL(file)); e.target.value = null; };
+
+  const formatTime = (ts) => ts && typeof ts.toDate === 'function' ? new Intl.DateTimeFormat('en-US', { hour: 'numeric', minute: '2-digit', hour12: true }).format(ts.toDate()) : "";
   const MessageStatusIcon = ({ msg }) => {
-    if (!msg.timestamp || typeof msg.timestamp.toDate !== 'function') return <Clock size={12} className="text-[#C1B2A6] ml-1" />; 
-    if (msg.status === 'seen') return <CheckCheck size={14} className="text-sky-300 drop-shadow-sm ml-1" />;
-    if (msg.status === 'delivered') return <CheckCheck size={14} className="text-[#E8E1D5] ml-1" />;
-    return <Check size={14} className="text-[#E8E1D5] ml-1" />; 
+    if (!msg.timestamp || typeof msg.timestamp.toDate !== 'function') return <Clock size={11} className="opacity-50" />; 
+    if (msg.status === 'seen') return <CheckCheck size={14} className={theme.name === 'WhatsApp Light' ? "text-[#53bdeb]" : "text-blue-400"} />;
+    if (msg.status === 'delivered') return <CheckCheck size={14} className="opacity-50" />;
+    return <Check size={14} className="opacity-50" />; 
   };
 
-  if (!chatId) return <Login onLogin={setChatId} />;
+  if (!myPhoneNumber) return <Login onLogin={setMyPhoneNumber} />;
+
+  const filteredChats = chatList.filter(chat => chat.name.toLowerCase().includes(searchQuery.toLowerCase()) || chat.otherId.includes(searchQuery));
+  const currentChatData = chatList.find(c => c.roomId === activeRoom);
+  const showTyping = activeRoomDoc && (activeRoomDoc.userTyping === true && activeRoomDoc.typingId !== myPhoneNumber);
+  const slideAnim = { initial: { x: "-100%" }, animate: { x: 0 }, exit: { x: "-100%" }, transition: { type: "tween", duration: 0.25 } };
 
   return (
-    <div className="flex flex-col w-full h-[100dvh] bg-[#F9F6F0] font-sans text-[#4A3C31] overflow-hidden relative">
+    <div className={`fixed inset-0 w-full h-[100dvh] flex flex-row ${theme.bgApp} font-sans ${theme.textMain} overflow-hidden transition-colors duration-300`}>
       
-      <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
-        <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#C1B2A6] mix-blend-multiply blur-[100px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#E8E1D5] mix-blend-multiply blur-[100px]" />
-      </div>
-
-      <AnimatePresence>
-        {selectedImage && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] bg-[#3A2D23]/95 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setSelectedImage(null)}>
-            <button className="absolute top-6 right-6 text-[#E8E1D5] hover:text-white p-2 rounded-full transition-colors z-50"><X size={28}/></button>
-            <img src={selectedImage} alt="Fullscreen" className="max-w-full max-h-full object-contain rounded-xl shadow-2xl border border-[#8C7462]/30" />
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {showProfile && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[80] bg-[#3A2D23]/60 backdrop-blur-md flex items-center justify-center p-4">
-            <motion.div initial={{ scale: 0.95, y: 20 }} animate={{ scale: 1, y: 0 }} exit={{ scale: 0.95, y: 20 }} className="bg-[#F9F6F0] w-full max-w-md rounded-3xl p-6 sm:p-8 shadow-2xl border border-[#C1B2A6]/50 flex flex-col relative">
-              <button onClick={() => setShowProfile(false)} className="absolute top-4 right-4 p-2 text-[#9E8E81] hover:text-[#5A4535] bg-[#E8E1D5]/50 rounded-full"><X size={20}/></button>
-              <h2 className="text-2xl font-serif font-bold text-[#3A2D23] mb-6">Profile Config</h2>
-              <div className="flex flex-col items-center mb-6">
-                <div className="relative group cursor-pointer" onClick={() => avatarInputRef.current?.click() }>
-                  <img src={userProfile.avatar || "https://i.ibb.co/3s3g3z1/default-avatar.png"} className="w-24 h-24 rounded-full object-cover border-4 border-[#E8E1D5] shadow-md" alt="Avatar"/>
-                  <div className="absolute inset-0 bg-[#3A2D23]/40 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"><ImageIcon className="text-white" size={24}/></div>
-                  {isSavingProfile && <div className="absolute inset-0 bg-[#F9F6F0]/80 rounded-full flex items-center justify-center"><Loader2 className="animate-spin text-[#8C7462]" size={24}/></div>}
-                </div>
-                <input type="file" accept="image/*" ref={avatarInputRef} onChange={handleAvatarUpload} className="hidden" />
-                <span className="text-xs font-bold text-[#9E8E81] uppercase mt-3 tracking-widest">Tap to change</span>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 block text-[#7A6B5D]">Display Name</label>
-                  <input type="text" value={userProfile.name} onChange={e => setUserProfile({...userProfile, name: e.target.value})} className="w-full rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#8C7462]/50 font-bold border border-[#C1B2A6]/50 text-sm bg-[#F9F6F0] text-[#3A2D23] shadow-inner" placeholder="Your Name"/>
-                </div>
-                <div>
-                  <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 flex justify-between text-[#7A6B5D]"><span>About / Bio</span> <span>{userProfile.bio.length}/200</span></label>
-                  <textarea value={userProfile.bio} maxLength={200} onChange={e => setUserProfile({...userProfile, bio: e.target.value})} rows={3} className="w-full rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[#8C7462]/50 font-medium border border-[#C1B2A6]/50 text-sm bg-[#F9F6F0] text-[#3A2D23] shadow-inner resize-none" placeholder="Add links, address, or info..."/>
-                </div>
-                <button onClick={handleSaveProfile} disabled={isSavingProfile} className="w-full mt-2 bg-[#5A4535] hover:bg-[#423226] disabled:opacity-50 text-[#F9F6F0] py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md">
-                  {isSavingProfile ? <Loader2 size={18} className="animate-spin" /> : "Save Profile"}
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {videoCallState?.isIncoming && (
-          <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[600] bg-black/80 backdrop-blur-2xl flex flex-col items-center justify-center text-white">
-            <div className="w-32 h-32 bg-white/10 rounded-full flex items-center justify-center mb-8 animate-[pulse_1s_infinite]">
-              <PhoneIncoming size={48} className="text-emerald-400" />
-            </div>
-            <h2 className="text-3xl font-bold mb-2 tracking-tight">Incoming Video Call</h2>
-            <p className="text-white/60 font-medium mb-12">Administrator is attempting to connect securely.</p>
-            <div className="flex gap-6">
-              <button onClick={rejectCall} className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center shadow-[0_0_30px_rgba(239,68,68,0.5)] transition-transform hover:scale-110"><PhoneOff size={28} /></button>
-              <button onClick={acceptCall} className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-600 flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.5)] transition-transform hover:scale-110"><Video size={28} /></button>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      <AnimatePresence>
-        {videoCallState && !videoCallState.isIncoming && (
-          <NativeVideoCall chatId={chatId} myRole="user" roomId={videoCallState.roomId} isIncoming={false} onClose={endCallFirebase} />
-        )}
-      </AnimatePresence>
-
-      {!isLoggingOut && (
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="flex flex-col w-full h-full relative z-10">
+      {/* Container for Desktop Centering */}
+      <div className="w-full h-full md:py-4 md:px-4 lg:py-6 lg:px-24 mx-auto max-w-[1600px] flex">
+        <div className={`flex w-full h-full md:shadow-2xl md:rounded-md overflow-hidden ${theme.bgMain} border border-white/5 relative`}>
           
-          {isOffline && <div className="absolute inset-0 bg-[#F9F6F0]/90 z-[60] flex flex-col items-center justify-center backdrop-blur-md"><WifiOff size={48} className="text-[#8C7462] mb-4 animate-pulse" /><h2 className="text-xl font-bold text-[#3A2D23]">Connection Lost</h2></div>}
-          
-          <header className="flex-none shrink-0 min-h-[72px] bg-[#F9F6F0]/80 backdrop-blur-xl border-b border-[#C1B2A6]/50 px-4 sm:px-8 py-3 flex items-center justify-between z-20 shadow-sm" style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
-            <div className="flex items-center gap-3">
-              <div className="relative flex items-center justify-center w-10 h-10 bg-gradient-to-br from-[#8C7462] to-[#5A4535] rounded-xl shadow-sm text-[#F9F6F0]">
-                <ShieldCheck size={20} />
-                <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-[#F9F6F0] rounded-full shadow-sm"></span>
-              </div>
-              <div>
-                <h3 className="font-bold text-[16px] sm:text-lg tracking-tight text-[#3A2D23]">Support Hub</h3>
-                <p className="text-[11px] sm:text-xs font-semibold text-[#8C7462] flex items-center gap-1"><Lock size={10}/> Encrypted</p>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button onClick={initiateCall} className="p-2 sm:p-2.5 rounded-xl text-blue-600 hover:bg-[#E8E1D5] transition-colors"><Video size={20} /></button>
-              <button onClick={() => setShowProfile(true)} className="p-2 sm:p-2.5 rounded-xl text-[#7A6B5D] hover:bg-[#E8E1D5] hover:text-[#5A4535] transition-colors"><UserCircle size={22} /></button>
-              <button onClick={handleLogout} className="p-2 sm:p-2.5 rounded-xl text-[#7A6B5D] hover:text-red-600 hover:bg-red-50 transition-colors"><LogOut size={20} /></button>
-            </div>
-          </header>
-
-          <main ref={chatContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto min-h-0 p-4 sm:p-8 relative z-10 custom-scrollbar">
-            <div className="w-full max-w-4xl mx-auto flex flex-col gap-4 pb-2">
-              <AnimatePresence mode="popLayout">
-                {messages.length === 0 && (
-                  <motion.div variants={fadeUp} initial="hidden" animate="visible" exit="hidden" className="flex flex-col items-center justify-center h-32 text-center gap-3 mt-10">
-                    <div className="p-4 rounded-full bg-[#E8E1D5] text-[#8C7462]"><ShieldCheck size={32} /></div>
-                    <div><h4 className="font-bold text-[#3A2D23]">Secure Channel Open</h4><p className="text-xs text-[#7A6B5D] mt-1 font-medium">End-to-end encrypted.</p></div>
-                  </motion.div>
-                )}
-
-                {messages.map((msg) => {
-                  const isUser = msg.sender === 'user';
-                  return (
-                    <motion.div key={msg.id} layout="position" variants={fadeUp} initial="hidden" animate="visible" className={`flex flex-col ${isUser ? 'items-end' : 'items-start'} group relative`}>
-                      
-                      {msg.replyToId && messages.find(m => m.id === msg.replyToId) && (
-                        <div className={`mb-1 px-3 py-1.5 rounded-lg text-xs font-medium border opacity-80 max-w-[70%] truncate ${isUser ? 'bg-[#E8E1D5] border-[#C1B2A6]/50 text-[#4A3C31]' : 'bg-[#C1B2A6]/30 border-[#C1B2A6]/50 text-[#4A3C31]'}`}>
-                          <Reply size={10} className="inline mr-1"/> {messages.find(m => m.id === msg.replyToId).text}
-                        </div>
-                      )}
-
-                      <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border break-words overflow-hidden ${isUser ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
-                        {msg.isVideoCall ? (
-                          <div className="flex flex-col items-center justify-center p-3 bg-black/10 rounded-xl border border-black/10 mb-1">
-                            <Video size={28} className={`mb-2 ${isUser ? 'text-[#F9F6F0]' : 'text-[#5A4535]'}`} />
-                            <p className="font-bold text-sm mb-3">Secure Video Call</p>
-                            <button onClick={() => setVideoCallState({ roomId: msg.roomName, isIncoming: false })} className={`px-5 py-2 rounded-full font-bold text-xs shadow-md transition-transform hover:scale-105 ${isUser ? 'bg-[#F9F6F0] text-[#5A4535]' : 'bg-[#5A4535] text-[#F9F6F0]'}`}>
-                              JOIN ROOM
-                            </button>
-                          </div>
-                        ) : msg.isImage ? (
-                          <div className="relative group/img cursor-zoom-in rounded-lg overflow-hidden mb-1" onClick={() => setSelectedImage(msg.text)}>
-                            <img src={msg.text} alt="Attachment" className="w-full max-w-[240px] sm:max-w-[320px] object-cover transition-transform duration-300 group-hover/img:scale-105" />
-                            <div className="absolute inset-0 bg-[#3A2D23]/0 group-hover/img:bg-[#3A2D23]/10 transition-colors flex items-center justify-center"><Maximize className="text-white opacity-0 group-hover/img:opacity-100" size={24} /></div>
-                          </div>
-                        ) : (
-                          <p className="whitespace-pre-wrap leading-relaxed text-[15px] sm:text-[16px]">{msg.text}</p>
-                        )}
-                        <div className={`text-[10px] font-medium mt-1.5 flex items-center gap-0.5 ${isUser ? 'justify-end text-[#C1B2A6]' : 'justify-start text-[#9E8E81]'}`}>
-                          {msg.isEdited && isUser && <span className="italic mr-1">(edited)</span>}
-                          {formatTime(msg.timestamp)}
-                          {isUser && <MessageStatusIcon msg={msg} />}
-                        </div>
-                      </div>
-
-                      <div className={`hidden sm:flex absolute top-1/2 -translate-y-1/2 ${isUser ? '-left-[44px]' : '-right-[44px]'} opacity-0 group-hover:opacity-100 transition-opacity gap-1.5`}>
-                        <button onClick={() => setReplyingToId(msg.id)} className="p-2 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 shadow-sm hover:text-[#5A4535] text-[#7A6B5D] transition-colors"><Reply size={14}/></button>
-                      </div>
-                    </motion.div>
-                  )
-                })}
-
-                {isAdminTyping && (
-                  <motion.div layout="position" variants={fadeUp} initial="hidden" animate="visible" exit="hidden" className="flex justify-start">
-                    <div className="px-4 py-3 rounded-2xl rounded-tl-sm border bg-[#F9F6F0] border-[#C1B2A6]/50 shadow-sm flex items-center gap-2">
-                      <span className="text-[10px] font-bold uppercase tracking-widest text-[#9E8E81]">Support typing</span>
-                      <div className="flex gap-1 ml-1"><div className="w-1.5 h-1.5 bg-[#8C7462] rounded-full animate-bounce"/><div className="w-1.5 h-1.5 bg-[#8C7462] rounded-full animate-bounce" style={{animationDelay:'0.15s'}}/><div className="w-1.5 h-1.5 bg-[#8C7462] rounded-full animate-bounce" style={{animationDelay:'0.3s'}}/></div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-              <div ref={messagesEndRef} className="h-1" />
-            </div>
-          </main>
-
+          {/* 🖼️ Image Lightbox */}
           <AnimatePresence>
-            {showScrollButton && (
-              <motion.button initial={{ opacity: 0, scale: 0.8 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.8 }} transition={animTween} onClick={() => scrollToBottom('smooth')} className="absolute bottom-32 right-6 p-3 bg-[#F9F6F0] text-[#5A4535] rounded-full shadow-md border border-[#C1B2A6]/50 z-30">
-                <ChevronDown size={20} strokeWidth={3} />
-              </motion.button>
+            {selectedImage && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setSelectedImage(null)}>
+                <button className="absolute top-6 right-6 text-white hover:text-gray-300 p-2"><X size={28}/></button>
+                <img src={selectedImage} alt="Fullscreen" className="max-w-full max-h-full object-contain" />
+              </motion.div>
             )}
           </AnimatePresence>
 
-          <footer className="flex-none shrink-0 w-full bg-[#F9F6F0]/90 backdrop-blur-xl border-t border-[#C1B2A6]/50 px-4 py-3 sm:px-8 z-20 shadow-[0_-10px_30px_rgba(90,70,50,0.03)]" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
-            <div className="w-full max-w-4xl mx-auto flex flex-col gap-2 relative">
-              
-              <AnimatePresence>
-                {connectionError && (
-                  <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center gap-2 bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-xl text-xs font-bold shadow-sm mb-1"><AlertCircle size={14} /> {connectionError}</motion.div>
-                )}
-                {replyingToId && (
-                  <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center justify-between bg-[#E8E1D5] border border-[#C1B2A6]/50 px-4 py-2 rounded-xl text-xs font-bold text-[#5A4535] shadow-sm mb-1">
-                    <span className="truncate flex-1 flex items-center gap-2"><Reply size={14}/> Replying: {messages.find(m => m.id === replyingToId)?.text?.substring(0,40)}...</span>
-                    <button onClick={() => setReplyingToId(null)} className="ml-2 bg-[#C1B2A6]/50 p-1 rounded-full hover:bg-[#C1B2A6]"><X size={12}/></button>
-                  </motion.div>
-                )}
-                {showAIReplies && (
-                  <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex gap-2 overflow-x-auto no-scrollbar py-1">
-                    {isGeneratingAI ? (
-                      <div className="flex items-center gap-2 px-4 py-1.5 rounded-full bg-[#E8E1D5] text-[#5A4535] border border-[#C1B2A6]/50 text-xs font-semibold"><Loader2 size={14} className="animate-spin" /> Analyzing context...</div>
-                    ) : (
-                      aiReplies.map((reply, i) => (
-                        <button key={i} onClick={() => handleSendText(null, reply)} className="text-[12px] whitespace-nowrap font-bold px-4 py-1.5 rounded-full bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:border-[#8C7462] hover:bg-[#E8E1D5] shadow-sm transition-colors min-h-[36px]">{reply}</button>
-                      ))
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              <form className="flex gap-2 items-end w-full">
-                <div className="flex gap-1 mb-1">
-                  <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageSelect} className="hidden" />
-                  <button type="button" onClick={() => { fileInputRef.current?.click(); }} disabled={isUploading || isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:border-[#8C7462] hover:text-[#5A4535] shadow-sm disabled:opacity-50 min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
-                    {isUploading ? <Loader2 size={20} className="animate-spin" /> : <ImageIcon size={20} />}
-                  </button>
-                  <button type="button" onClick={generateAIQuickReplies} title="AI Replies" disabled={isOffline} className="p-2.5 sm:p-3 rounded-xl bg-[#E8E1D5] border border-[#C1B2A6]/50 text-[#8C7462] hover:bg-[#C1B2A6]/50 shadow-sm min-h-[44px] min-w-[44px] flex items-center justify-center transition-colors">
-                    <Sparkles size={20} className={isGeneratingAI ? "animate-pulse" : ""} />
-                  </button>
+          {/* 📞 CALL OVERLAYS */}
+          <AnimatePresence>
+            {videoCallState?.isIncoming && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="absolute inset-0 z-[600] bg-black/90 backdrop-blur-md flex flex-col items-center justify-center text-white">
+                <div className={`w-32 h-32 ${theme.primary.replace('bg-','bg-opacity-20')} rounded-full flex items-center justify-center mb-8 animate-pulse`}>
+                  <PhoneIncoming size={48} className={theme.primary.replace('bg-','text-')} />
                 </div>
+                <h2 className="text-3xl font-medium mb-12 tracking-wide">Incoming Call...</h2>
+                <div className="flex gap-12">
+                  <button onClick={rejectCall} className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center shadow-lg"><PhoneOff size={28} /></button>
+                  <button onClick={acceptCall} className={`w-16 h-16 rounded-full ${theme.primary} flex items-center justify-center shadow-lg`}><Video size={28} /></button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+          <AnimatePresence>
+            {videoCallState && !videoCallState.isIncoming && <NativeVideoCall chatId={activeRoom} myRole="user" roomId={videoCallState.roomId} isIncoming={false} onClose={endCallFirebase} />}
+          </AnimatePresence>
 
-                <div className="flex-1 relative bg-[#F9F6F0] border border-[#C1B2A6]/50 rounded-2xl shadow-sm focus-within:border-[#8C7462] focus-within:ring-2 focus-within:ring-[#E8E1D5] transition-all flex flex-col p-1.5">
-                  
-                  {previewUrl && (
-                    <div className="relative mb-2 ml-2 mt-2 inline-block w-max">
-                      <img src={previewUrl} className="h-20 w-auto rounded-lg border border-[#C1B2A6]/50 object-cover shadow-sm" alt="Preview" />
-                      <button type="button" onClick={() => { setPendingImage(null); setPreviewUrl(null); }} className="absolute -top-2 -right-2 bg-[#3A2D23] text-[#F9F6F0] rounded-full p-1 hover:bg-red-50 shadow-md transition-colors z-10"><X size={12}/></button>
-                      <button type="button" onClick={() => setCompressImage(!compressImage)} className={`absolute bottom-2 left-2 text-[10px] font-bold px-2 py-1 rounded-md border z-10 transition-colors backdrop-blur-md shadow-sm ${compressImage ? 'bg-[#5A4535]/90 text-white border-[#4A3C31]' : 'bg-[#E8E1D5]/80 text-[#4A3C31] border-[#C1B2A6]'}`}>
-                        {compressImage ? '⚡ Fast' : '💎 HQ'}
-                      </button>
+          {/* ========================================== */}
+          {/* 👈 LEFT SIDEBAR (Chats, Profile, Settings) */}
+          {/* ========================================== */}
+          <div className={`w-full md:w-[30%] md:min-w-[320px] md:max-w-[420px] h-full flex-none flex-col ${theme.bgSidebar} border-r border-black/10 z-30 relative overflow-hidden ${activeRoom ? 'hidden md:flex' : 'flex'}`}>
+            
+            {/* MAIN CHAT LIST PANEL */}
+            <div className="flex flex-col h-full w-full">
+              <div className={`flex-none h-[64px] flex justify-between items-center px-4 ${theme.bgHeader} border-b border-black/10`}>
+                <img src={userProfile.avatar} onClick={() => setActivePanel('profile')} className="w-10 h-10 rounded-full object-cover cursor-pointer" alt="Me" />
+                <div className={`flex items-center gap-4 ${theme.textMuted}`}>
+                  <button onClick={() => setActivePanel('settings')} className="hover:text-current transition-colors"><Settings size={20}/></button>
+                  <button onClick={() => setActivePanel('newChat')} className="hover:text-current transition-colors"><MessageSquarePlus size={20}/></button>
+                </div>
+              </div>
+
+              <div className="flex-none p-2 border-b border-black/5">
+                <div className={`rounded-lg flex items-center px-4 py-2 gap-3 ${theme.bgHeader}`}>
+                  <Search size={18} className={theme.textMuted}/>
+                  <input type="text" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search or start new chat" className="bg-transparent focus:outline-none w-full text-sm placeholder-current opacity-70 h-6"/>
+                </div>
+              </div>
+
+              <div className="flex-1 overflow-y-auto custom-scrollbar">
+                {filteredChats.length === 0 ? (
+                  <div className={`flex flex-col items-center justify-center h-full ${theme.textMuted} opacity-80 px-6 text-center`}>
+                    <Lock size={48} className="mb-4 stroke-1"/>
+                    <h3 className="text-lg font-medium mb-1">Messages are end-to-end encrypted</h3>
+                    <p className="text-sm">Click the chat icon above to start.</p>
+                  </div>
+                ) : (
+                  filteredChats.map((chat) => (
+                    <div key={chat.roomId} onClick={() => setActiveRoom(chat.roomId)} className={`flex items-center gap-3 px-3 py-3 cursor-pointer transition-colors ${activeRoom === chat.roomId ? 'bg-black/10' : 'hover:bg-black/5'}`}>
+                      <div className={`w-[48px] h-[48px] rounded-full flex-shrink-0 flex items-center justify-center text-white font-medium text-lg ${theme.primary}`}>
+                        {chat.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="flex-1 min-w-0 border-b border-black/5 pb-3 pt-1">
+                        <div className="flex justify-between items-baseline mb-0.5">
+                          <h4 className="text-[16px] font-medium truncate">{chat.name}</h4>
+                          <span className={`text-xs ${theme.textMuted} flex-shrink-0`}>{formatTime(chat.timestamp)}</span>
+                        </div>
+                        <p className={`text-sm ${theme.textMuted} truncate`}>{chat.lastMessage}</p>
+                      </div>
                     </div>
-                  )}
+                  ))
+                )}
+              </div>
+            </div>
 
-                  <div className="flex items-end w-full">
-                    <textarea 
-                      ref={textareaRef} value={newMessage} 
-                      onChange={(e) => { setNewMessage(e.target.value); e.target.style.height = '48px'; e.target.style.height = `${Math.min(e.target.scrollHeight, 120)}px`; }} 
-                      onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(e); } }}
-                      onFocus={handleInputFocus} onBlur={handleInputBlur} placeholder={previewUrl ? "Add a caption (optional)..." : "Message..."} disabled={isOffline || isUploading} rows={1}
-                      className={`flex-1 bg-transparent py-2.5 text-[16px] text-[#4A3C31] placeholder-[#9E8E81] focus:outline-none resize-none custom-scrollbar leading-relaxed pl-3 pr-12`}
-                      style={{ minHeight: '48px' }}
-                    />
-                    
-                    <div className="absolute right-1.5 bottom-1.5">
-                      <motion.button onClick={handleSendText} type="button" whileTap={{ scale: 0.95 }} disabled={(!newMessage.trim() && !pendingImage) || isOffline || isUploading} className="p-2 rounded-xl bg-[#5A4535] text-[#F9F6F0] shadow-sm disabled:opacity-50 transition-opacity min-h-[36px] min-w-[36px] flex items-center justify-center">
-                        {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} className="ml-0.5" />}
-                      </motion.button>
+            {/* SLIDING PANELS (Profile, Settings, NewChat) */}
+            <AnimatePresence>
+              {activePanel !== 'chats' && (
+                <motion.div {...slideAnim} className={`absolute inset-0 z-40 flex flex-col ${theme.bgSidebar}`}>
+                  <header className={`h-[108px] text-white flex items-end px-5 pb-4 gap-6 flex-shrink-0 ${theme.primary}`}>
+                    <button onClick={() => setActivePanel('chats')}><ArrowLeft size={24} /></button>
+                    <h2 className="text-xl font-medium">
+                      {activePanel === 'newChat' && "New Chat"}
+                      {activePanel === 'profile' && "Profile"}
+                      {activePanel === 'settings' && "Settings"}
+                    </h2>
+                  </header>
+
+                  <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                    {/* NEW CHAT */}
+                    {activePanel === 'newChat' && (
+                      <form onSubmit={handleStartNewChat} className="space-y-6">
+                        {newChatError && <div className="text-red-500 text-sm">{newChatError}</div>}
+                        <div>
+                          <label className={`text-xs font-bold uppercase tracking-wider mb-2 block ${theme.primary.replace('bg-', 'text-')}`}>Contact Name</label>
+                          <input type="text" value={newChatName} onChange={e => setNewChatName(e.target.value)} required className="w-full border-b-2 border-gray-300 focus:border-current py-2 focus:outline-none bg-transparent" placeholder="E.g. John"/>
+                        </div>
+                        <div>
+                          <label className={`text-xs font-bold uppercase tracking-wider mb-2 block ${theme.primary.replace('bg-', 'text-')}`}>6-Digit Phone No.</label>
+                          <input type="text" value={newChatPhone} onChange={e => setNewChatPhone(e.target.value)} required className="w-full border-b-2 border-gray-300 focus:border-current py-2 focus:outline-none bg-transparent font-mono tracking-widest" placeholder="123456"/>
+                        </div>
+                        <button type="submit" disabled={isStartingChat} className={`w-full ${theme.primary} text-white py-3 rounded-lg font-medium flex justify-center`}>
+                          {isStartingChat ? <Loader2 size={20} className="animate-spin"/> : "Start Chat"}
+                        </button>
+                      </form>
+                    )}
+
+                    {/* PROFILE */}
+                    {activePanel === 'profile' && (
+                      <div className="flex flex-col items-center">
+                        <div className="relative group cursor-pointer mb-8" onClick={() => avatarInputRef.current?.click()}>
+                          <img src={userProfile.avatar} className="w-48 h-48 rounded-full object-cover shadow-md border-4 border-white/10" alt="Avatar"/>
+                          <div className="absolute inset-0 bg-black/50 rounded-full flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-white text-sm font-medium gap-2"><Camera size={28}/> CHANGE</div>
+                          {isSavingProfile && <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center"><Loader2 className="animate-spin text-white" size={32}/></div>}
+                        </div>
+                        <input type="file" accept="image/*" ref={avatarInputRef} onChange={handleAvatarUpload} className="hidden" />
+                        <div className="w-full space-y-6">
+                          <div>
+                            <label className={`text-xs font-bold uppercase tracking-wider mb-2 block ${theme.textMuted}`}>Your Name</label>
+                            <input type="text" value={userProfile.name} onChange={e => setUserProfile({...userProfile, name: e.target.value})} className="w-full border-b-2 border-gray-300 focus:border-current py-2 focus:outline-none bg-transparent" />
+                          </div>
+                          <div>
+                            <label className={`text-xs font-bold uppercase tracking-wider mb-2 block ${theme.textMuted}`}>About</label>
+                            <input type="text" value={userProfile.bio} onChange={e => setUserProfile({...userProfile, bio: e.target.value})} className="w-full border-b-2 border-gray-300 focus:border-current py-2 focus:outline-none bg-transparent" />
+                          </div>
+                          <button onClick={handleSaveProfile} disabled={isSavingProfile} className={`w-full ${theme.primary} text-white py-3 rounded-lg font-medium flex justify-center`}>
+                            SAVE
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* SETTINGS (THEMES) */}
+                    {activePanel === 'settings' && (
+                      <div className="space-y-6">
+                        <div>
+                          <h3 className={`text-sm font-bold uppercase tracking-wider mb-4 flex items-center gap-2 ${theme.textMuted}`}><Palette size={16}/> Theme Engine</h3>
+                          <div className="space-y-2">
+                            <button onClick={() => changeTheme('whatsappLight')} className={`w-full p-4 rounded-xl flex justify-between items-center border ${activeThemeKey === 'whatsappLight' ? `border-current ${theme.primary.replace('bg-','text-')} bg-black/5` : 'border-transparent hover:bg-black/5'}`}>
+                              <span className="font-medium">WhatsApp Light</span>
+                              {activeThemeKey === 'whatsappLight' && <CheckCircle size={18}/>}
+                            </button>
+                            <button onClick={() => changeTheme('telegramNight')} className={`w-full p-4 rounded-xl flex justify-between items-center border ${activeThemeKey === 'telegramNight' ? `border-blue-500 text-blue-500 bg-black/20` : 'border-transparent hover:bg-black/5'}`}>
+                              <span className="font-medium text-gray-400">Telegram Night</span>
+                              {activeThemeKey === 'telegramNight' && <CheckCircle size={18}/>}
+                            </button>
+                            <button onClick={() => changeTheme('oledMatrix')} className={`w-full p-4 rounded-xl flex justify-between items-center border ${activeThemeKey === 'oledMatrix' ? `border-green-500 text-green-500 bg-green-500/10` : 'border-transparent hover:bg-black/5'}`}>
+                              <span className="font-medium text-gray-400">OLED Matrix</span>
+                              {activeThemeKey === 'oledMatrix' && <CheckCircle size={18}/>}
+                            </button>
+                          </div>
+                        </div>
+                        <div className="pt-6 border-t border-black/10">
+                          <button onClick={() => { setMyPhoneNumber(null); setActiveRoom(null); }} className="w-full flex items-center gap-3 text-red-500 p-4 hover:bg-red-500/10 rounded-xl transition-colors font-medium">
+                            <LogOut size={20}/> Log out
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+
+          {/* ========================================== */}
+          {/* 👉 RIGHT MAIN CHAT AREA */}
+          {/* ========================================== */}
+          <div className={`flex-1 flex flex-col h-full min-w-0 relative ${theme.bgMain} ${!activeRoom ? 'hidden md:flex' : 'flex'}`}>
+            
+            {/* ✅ FIXED: WhatsApp Chat Pattern Background uses inline style to prevent 404 errors */}
+            <div className="absolute inset-0 z-0 opacity-30 bg-repeat" style={{ backgroundImage: "url('https://i.ibb.co/3W6qkVq/whatsapp-bg.png')", backgroundSize: '400px' }}></div>
+            {isOffline && <div className="absolute inset-0 bg-black/50 backdrop-blur-md z-[60] flex flex-col items-center justify-center text-white"><WifiOff size={48} className="mb-4 animate-pulse" /><h2 className="text-xl font-bold">Reconnecting...</h2></div>}
+
+            {activeRoom ? (
+              <>
+                {/* Chat Header */}
+                <header className={`flex-none h-[64px] ${theme.bgHeader} px-4 flex items-center justify-between z-20 border-l border-black/10`}>
+                  <div className="flex items-center gap-3 min-w-0">
+                    <button onClick={() => setActiveRoom(null)} className={`md:hidden ${theme.textMuted}`}><ArrowLeft size={24}/></button>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center text-white font-medium flex-shrink-0 ${theme.primary}`}>
+                      {currentChatData?.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div className="flex flex-col min-w-0">
+                      <h3 className="text-[16px] font-medium truncate">{currentChatData?.name}</h3>
+                      {showTyping && <p className={`text-[13px] ${theme.primary.replace('bg-','text-')}`}>typing...</p>}
                     </div>
                   </div>
-                </div>
+                  <div className={`flex items-center gap-5 ${theme.textMuted} relative`}>
+                    <button onClick={initiateCall}><Video size={20} /></button>
+                    <button onClick={initiateCall}><Phone size={20} /></button>
+                    <button><Search size={20} /></button>
+                    
+                    <button onClick={() => setShowChatOptions(!showChatOptions)}><MoreVertical size={20} /></button>
+                    
+                    {/* 3-DOTS MENU POPOVER */}
+                    <AnimatePresence>
+                      {showChatOptions && (
+                        <>
+                          <div className="fixed inset-0 z-40" onClick={() => setShowChatOptions(false)} />
+                          <motion.div initial={{ opacity: 0, scale: 0.95, y: 10 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.95 }} className={`absolute right-0 top-10 w-48 ${theme.bgSidebar} rounded-lg shadow-xl py-2 z-50 border border-black/10`}>
+                            <button className="w-full text-left px-4 py-2.5 text-[14px] hover:bg-black/5 transition-colors">Contact info</button>
+                            <button onClick={clearChat} className="w-full text-left px-4 py-2.5 text-[14px] text-red-500 hover:bg-red-500/10 transition-colors flex justify-between items-center">Clear chat <Trash2 size={14}/></button>
+                            <button onClick={() => { setActiveRoom(null); setShowChatOptions(false); }} className="w-full text-left px-4 py-2.5 text-[14px] hover:bg-black/5 transition-colors">Close chat</button>
+                          </motion.div>
+                        </>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </header>
 
-              </form>
-            </div>
-          </footer>
-        </motion.div>
-      )}
+                {/* Chat History */}
+                <main ref={chatContainerRef} onScroll={handleScroll} className="flex-1 overflow-y-auto min-h-0 px-[5%] sm:px-[10%] py-4 relative z-10 custom-scrollbar">
+                  
+                  <div className="flex justify-center mb-6 mt-2">
+                    <span className={`text-[12.5px] ${theme.bgSidebar} ${theme.textMuted} px-3 py-1.5 rounded-lg shadow-sm flex items-center gap-1.5 font-medium`}>
+                      <Lock size={12}/> Messages are end-to-end encrypted.
+                    </span>
+                  </div>
+
+                  <div className="flex flex-col gap-1 pb-2">
+                    <AnimatePresence mode="popLayout">
+                      {messages.map((msg, index) => {
+                        const isMe = msg.senderId === myPhoneNumber;
+                        const prevMsg = index > 0 ? messages[index - 1] : null;
+                        const nextMsg = messages[index + 1];
+                        const isFirstInGroup = !prevMsg || prevMsg.senderId !== msg.senderId;
+                        const isLastInGroup = !nextMsg || nextMsg.senderId !== msg.senderId;
+
+                        return (
+                          <motion.div key={msg.id} layout="position" variants={fadeUp} initial="hidden" animate="visible" className={`flex flex-col ${isMe ? 'items-end' : 'items-start'} ${isLastInGroup ? 'mb-3' : 'mb-0.5'} group relative`}>
+                            
+                            <div className={`relative px-2.5 py-1.5 shadow-sm text-[14.2px] leading-[19px] break-words min-w-[80px] max-w-[85%] sm:max-w-[75%]
+                              ${isMe ? theme.bubbleOut : theme.bubbleIn}
+                              ${isFirstInGroup && isMe ? 'rounded-l-lg rounded-br-lg rounded-tr-none' : ''}
+                              ${isFirstInGroup && !isMe ? 'rounded-r-lg rounded-bl-lg rounded-tl-none' : ''}
+                              ${!isFirstInGroup ? 'rounded-lg' : ''}
+                            `}>
+                              
+                              {isFirstInGroup && (
+                                <svg viewBox="0 0 8 13" width="8" height="13" className={`absolute top-0 ${isMe ? '-right-[8px] '+theme.bubbleOut.replace('bg-','text-') : '-left-[8px] '+theme.bubbleIn.replace('bg-','text-')} fill-current`}>
+                                  {isMe ? <path d="M5.188 1H0v11.193l6.467-8.625C7.526 2.156 6.958 1 5.188 1z" /> : <path d="M1.533 3.568 8 12.193V1H2.812C1.042 1 .474 2.156 1.533 3.568z" />}
+                                </svg>
+                              )}
+
+                              {msg.replyToId && messages.find(m => m.id === msg.replyToId) && (
+                                <div className={`mb-1 px-3 py-2 rounded-md text-[13px] bg-black/5 border-l-4 ${theme.primary.replace('bg-','border-')} opacity-80 truncate max-w-full`}>
+                                  {messages.find(m => m.id === msg.replyToId).text}
+                                </div>
+                              )}
+
+                              {msg.isImage ? (
+                                <div className="cursor-pointer overflow-hidden rounded-md mb-1 relative" onClick={() => setSelectedImage(msg.text)}>
+                                  <img src={msg.text} alt="Attachment" className="max-w-[260px] sm:max-w-[320px] object-cover" />
+                                </div>
+                              ) : (
+                                <span className="whitespace-pre-wrap">{msg.text}</span>
+                              )}
+                              
+                              <div className={`text-[11px] ${theme.textMuted} float-right mt-1 ml-3 flex items-center gap-1 translate-y-[2px]`}>
+                                {formatTime(msg.timestamp)}
+                                {isMe && <MessageStatusIcon msg={msg} />}
+                              </div>
+                            </div>
+
+                            <div className={`hidden sm:flex absolute top-1/2 -translate-y-1/2 ${isMe ? '-left-10' : '-right-10'} opacity-0 group-hover:opacity-100 transition-opacity`}>
+                              <button onClick={() => setReplyingToId(msg.id)} className={`p-1.5 ${theme.textMuted} hover:text-current`}><Reply size={16}/></button>
+                            </div>
+                          </motion.div>
+                        )
+                      })}
+                      
+                      {/* AI Quick Replies Render Block */}
+                      {showAIReplies && (
+                        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="flex gap-2 overflow-x-auto no-scrollbar py-1">
+                          {isGeneratingAI ? (
+                            <div className={`flex items-center gap-2 px-4 py-1.5 rounded-full ${theme.bgSidebar} text-xs font-semibold shadow-sm`}><Loader2 size={14} className="animate-spin" /> Analyzing context...</div>
+                          ) : (
+                            aiReplies.map((reply, i) => (
+                              <button key={i} onClick={() => handleSendText(null, reply)} className={`text-[13px] whitespace-nowrap font-medium px-4 py-2 rounded-full ${theme.bgSidebar} shadow-sm border border-black/5 hover:bg-black/5 transition-colors`}>{reply}</button>
+                            ))
+                          )}
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
+                    <div ref={messagesEndRef} className="h-1" />
+                  </div>
+                </main>
+
+                {showScrollButton && (
+                  <button onClick={() => scrollToBottom('smooth')} className={`absolute bottom-[80px] right-6 p-2.5 ${theme.bgSidebar} ${theme.textMuted} rounded-full shadow-md z-30`}>
+                    <ChevronDown size={24} />
+                  </button>
+                )}
+
+                {/* Chat Footer Input Area */}
+                <footer className={`flex-none ${theme.bgHeader} min-h-[62px] px-4 py-2.5 z-20 flex flex-col relative border-l border-black/10`}>
+                  
+                  <AnimatePresence>
+                    {replyingToId && (
+                      <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 10 }} className={`flex items-center justify-between bg-black/5 px-4 py-3 rounded-t-lg border-l-4 ${theme.primary.replace('bg-','border-')} -mt-2 mb-2`}>
+                        <span className={`text-[13px] ${theme.textMuted} truncate`}>Replying to: {messages.find(m => m.id === replyingToId)?.text}</span>
+                        <button onClick={() => setReplyingToId(null)} className={theme.textMuted}><X size={16}/></button>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  <form className="flex gap-2 sm:gap-4 items-end w-full relative">
+                    
+                    <div className={`flex gap-4 items-center ${theme.textMuted} pb-3 pl-2 relative`}>
+                      <button type="button" onClick={() => { setShowEmojiPicker(!showEmojiPicker); setShowAttachMenu(false); }} className={showEmojiPicker ? theme.primary.replace('bg-','text-') : ''}><Smile size={26} strokeWidth={1.5} /></button>
+                      <AnimatePresence>
+                        {showEmojiPicker && (
+                          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 20 }} className="absolute bottom-12 left-0 z-50 shadow-2xl rounded-xl overflow-hidden border border-black/10">
+                            <EmojiPicker theme={activeThemeKey === 'whatsappLight' ? 'light' : 'dark'} onEmojiClick={(e) => setNewMessage(prev => prev + e.emoji)} />
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+
+                      <button type="button" onClick={() => { setShowAttachMenu(!showAttachMenu); setShowEmojiPicker(false); }} className={showAttachMenu ? theme.primary.replace('bg-','text-') : ''}><Paperclip size={24} strokeWidth={1.5}/></button>
+                      <AnimatePresence>
+                        {showAttachMenu && (
+                          <motion.div initial={{ opacity: 0, scale: 0.8, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }} exit={{ opacity: 0, scale: 0.8, y: 20 }} className="absolute bottom-14 left-6 flex flex-col gap-4 z-50 p-2">
+                            <input type="file" accept="image/*" ref={fileInputRef} onChange={handleImageUpload} className="hidden" />
+                            <button type="button" onClick={() => fileInputRef.current?.click()} className="flex items-center gap-3 group">
+                              <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-purple-500 to-pink-500 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform"><ImageIcon size={22}/></div>
+                              <span className="text-sm font-medium text-white bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full shadow-sm">Photos & Videos</span>
+                            </button>
+                            <button type="button" onClick={generateAIQuickReplies} className="flex items-center gap-3 group">
+                              <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-emerald-500 to-teal-500 text-white flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform"><Sparkles size={22}/></div>
+                              <span className="text-sm font-medium text-white bg-black/50 backdrop-blur-md px-3 py-1.5 rounded-full shadow-sm">AI Quick Reply</span>
+                            </button>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                    <div className={`flex-1 ${theme.bgSidebar} rounded-lg flex flex-col p-1 shadow-sm border border-transparent focus-within:border-black/10`}>
+                      {previewUrl && (
+                        <div className="relative m-2 inline-block w-max">
+                          <img src={previewUrl} className="h-20 w-auto rounded-md object-cover border border-gray-200" alt="Preview" />
+                          <button type="button" onClick={() => { setPendingImage(null); setPreviewUrl(null); }} className="absolute -top-2 -right-2 bg-gray-800 text-white rounded-full p-1"><X size={12}/></button>
+                        </div>
+                      )}
+                      <textarea 
+                        ref={textareaRef} value={newMessage} 
+                        onChange={(e) => { setNewMessage(e.target.value); e.target.style.height = '42px'; e.target.style.height = `${Math.min(e.target.scrollHeight, 100)}px`; }} 
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendText(e); } }}
+                        onFocus={handleInputFocus} onBlur={handleInputBlur} placeholder="Type a message" disabled={isOffline || isUploading} rows={1}
+                        className="flex-1 bg-transparent py-2.5 px-3 text-[15px] focus:outline-none resize-none custom-scrollbar placeholder-gray-500"
+                        style={{ minHeight: '42px' }}
+                      />
+                    </div>
+
+                    <div className="pb-2.5 flex items-center pr-2">
+                      {isUploading ? (
+                        <Loader2 size={26} className={`animate-spin ${theme.primary.replace('bg-','text-')}`} />
+                      ) : newMessage.trim() || pendingImage ? (
+                        <button onClick={handleSendText} type="button" disabled={isOffline || isUploading} className={`${theme.textMuted} hover:text-current transition-colors p-1`}><Send size={26} strokeWidth={1.5} /></button>
+                      ) : (
+                        <button type="button" className={`${theme.textMuted} p-1`}><Mic size={26} strokeWidth={1.5} /></button>
+                      )}
+                    </div>
+                  </form>
+                </footer>
+              </>
+            ) : (
+              <div className={`flex-1 flex flex-col items-center justify-center text-center px-4 ${theme.bgHeader} border-l border-black/10 z-10`}>
+                <div className={`w-32 h-32 rounded-full ${theme.primary} opacity-10 mb-8 flex items-center justify-center`}><MessageSquarePlus size={48} className="text-black opacity-50"/></div>
+                <h2 className="text-[32px] font-light mb-4">Desktop Portal</h2>
+                <p className={`text-[14px] ${theme.textMuted} max-w-[460px] leading-relaxed`}>Select a chat from the left or create a new one to start messaging.</p>
+                <div className={`absolute bottom-10 flex items-center gap-1.5 text-[13px] ${theme.textMuted}`}><Lock size={12}/> End-to-end encrypted</div>
+              </div>
+            )}
+          </div>
+          
+        </div>
+      </div>
     </div>
   );
 }

@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { auth, db, googleProvider } from '../services/firebase';
 import { signInWithPopup, signOut, onAuthStateChanged } from 'firebase/auth';
 import { collection, doc, setDoc, addDoc, query, orderBy, onSnapshot, serverTimestamp, updateDoc, deleteDoc } from 'firebase/firestore';
-import { Send, LogOut, Plus, Trash2, Clock, ShieldHalf, Activity, MessageSquare, KeyRound, Settings, Ghost, Edit2, X, Eraser, Download, ChevronLeft, Copy, Image as ImageIcon, Loader2, Maximize, ChevronDown, Sparkles, Edit3, Check, CheckCheck, EyeOff, Bell, MapPin, Mail, UserPlus, Reply, Video, PhoneIncoming, PhoneOff, AlertCircle, WifiOff } from 'lucide-react';
+import { Send, LogOut, Plus, Trash2, Clock, ShieldHalf, Activity, MessageSquare, KeyRound, Settings, Ghost, Edit2, X, Eraser, Download, ChevronLeft, Copy, Image as ImageIcon, Loader2, Maximize, ChevronDown, Sparkles, Edit3, Check, CheckCheck, EyeOff, Bell, MapPin, Mail, UserPlus, Reply, Video, PhoneIncoming, PhoneOff, AlertCircle, WifiOff, Users } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import NativeVideoCall from '../components/NativeVideoCall';
@@ -33,7 +33,7 @@ export default function AdminDashboard() {
   const [compressImage, setCompressImage] = useState(true);
   const [selectedImage, setSelectedImage] = useState(null);
   
-  const [accessCodes, setAccessCodes] = useState([]);
+  const [accounts, setAccounts] = useState([]);
   const [accessRequests, setAccessRequests] = useState([]); 
   const [activeChatId, setActiveChatId] = useState(null);
   const [messages, setMessages] = useState([]);
@@ -45,9 +45,8 @@ export default function AdminDashboard() {
   const [replyingToId, setReplyingToId] = useState(null);
   const [connectionError, setConnectionError] = useState("");
   
-  const [newCodeId, setNewCodeId] = useState("");
+  const [newCodeId, setNewCodeId] = useState(""); 
   const [newCodeName, setNewCodeName] = useState("");
-  const [expiryHours, setExpiryHours] = useState("0"); 
   const [videoCallState, setVideoCallState] = useState(null);
 
   const [isOffline, setIsOffline] = useState(!navigator.onLine);
@@ -59,7 +58,6 @@ export default function AdminDashboard() {
   const previousMessageCount = useRef(0);
   const isWindowFocused = useRef(true);
 
-  // --- 1. AUTH & GLOBAL LISTENERS ---
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user && user.email === ADMIN_EMAIL) setAdminUser(user); else setAdminUser(null);
@@ -72,7 +70,6 @@ export default function AdminDashboard() {
     const handleFocus = () => { isWindowFocused.current = true; document.title = "Admin HQ | Secure Portal"; };
     const handleBlur = () => isWindowFocused.current = false;
     const handleKeyDown = (e) => { if (e.key === 'Escape' && selectedImage) setSelectedImage(null); };
-    
     const handleOnline = () => setIsOffline(false);
     const handleOffline = () => setIsOffline(true);
 
@@ -87,20 +84,20 @@ export default function AdminDashboard() {
 
   const handleAdminLogout = async () => { try { await signOut(auth); setAdminUser(null); setActiveChatId(null); setMessages([]); setActiveTab('chats'); } catch (err) {} };
 
-  // --- 2. FETCH IDs & REQUESTS ---
   useEffect(() => {
     if (!adminUser) return;
-    const unsubCodes = onSnapshot(query(collection(db, 'access_codes')), (snapshot) => setAccessCodes(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
+    const unsubKeys = onSnapshot(query(collection(db, 'auth_keys')), (snapshot) => setAccounts(snapshot.docs.map(doc => ({ secretCode: doc.id, ...doc.data() }))));
     const unsubReqs = onSnapshot(query(collection(db, 'id_requests'), orderBy('timestamp', 'desc')), (snapshot) => setAccessRequests(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))));
-    return () => { unsubCodes(); unsubReqs(); };
+    return () => { unsubKeys(); unsubReqs(); };
   }, [adminUser]);
 
-  // --- 3. CHAT ENGINE & SIGNALING ---
   useEffect(() => {
     setShowAIReplies(false); setAiReplies([]); setPendingImage(null); setPreviewUrl(null); setReplyingToId(null); setConnectionError("");
     if (!activeChatId) return;
     
-    const unsubscribeMessages = onSnapshot(query(collection(db, 'chats', activeChatId, 'messages'), orderBy('timestamp', 'asc')), (snapshot) => {
+    const roomId = `ADMIN_${activeChatId}`;
+
+    const unsubscribeMessages = onSnapshot(query(collection(db, 'rooms', roomId, 'messages'), orderBy('timestamp', 'asc')), (snapshot) => {
       const fetchedMessages = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setMessages(fetchedMessages);
       if (previousMessageCount.current !== 0 && fetchedMessages.length > previousMessageCount.current) {
@@ -113,7 +110,7 @@ export default function AdminDashboard() {
       setTimeout(() => scrollToBottom('auto'), 100);
     }, () => setConnectionError("Secure connection lost."));
 
-    const unsubscribeDoc = onSnapshot(doc(db, 'chats', activeChatId), (docSnap) => { 
+    const unsubscribeDoc = onSnapshot(doc(db, 'rooms', roomId), (docSnap) => { 
       if (docSnap.exists()) {
         const data = docSnap.data();
         setActiveChatDoc(data);
@@ -131,91 +128,132 @@ export default function AdminDashboard() {
     return () => { unsubscribeMessages(); unsubscribeDoc(); previousMessageCount.current = 0; RING_TONE.pause(); };
   }, [activeChatId]);
 
-  // --- 4. PRESENCE & RECEIPTS ---
   useEffect(() => {
     if (!activeChatId) return;
-    const setOnlineStatus = async () => setDoc(doc(db, 'chats', activeChatId), { adminOnline: !ghostMode, adminTyping: false }, { merge: true }).catch(()=>{});
+    const roomId = `ADMIN_${activeChatId}`;
+    const setOnlineStatus = async () => setDoc(doc(db, 'rooms', roomId), { adminOnline: !ghostMode, adminTyping: false }, { merge: true }).catch(()=>{});
     setOnlineStatus();
-    return () => { if (!ghostMode && activeChatId) setDoc(doc(db, 'chats', activeChatId), { adminOnline: false, adminLastSeen: serverTimestamp() }, { merge: true }).catch(()=>{}); };
+    return () => { if (!ghostMode && activeChatId) setDoc(doc(db, 'rooms', roomId), { adminOnline: false, adminLastSeen: serverTimestamp() }, { merge: true }).catch(()=>{}); };
   }, [activeChatId, ghostMode]);
 
   useEffect(() => {
     if (!activeChatId || hideReceipts) return;
+    const roomId = `ADMIN_${activeChatId}`;
     const hasFocus = document.hasFocus();
     messages.forEach(msg => {
       if (msg.sender === 'user') {
-        if (hasFocus && msg.status !== 'seen') updateDoc(doc(db, 'chats', activeChatId, 'messages', msg.id), { status: 'seen' }).catch(()=>{});
-        else if (!hasFocus && msg.status === 'sent') updateDoc(doc(db, 'chats', activeChatId, 'messages', msg.id), { status: 'delivered' }).catch(()=>{});
+        if (hasFocus && msg.status !== 'seen') updateDoc(doc(db, 'rooms', roomId, 'messages', msg.id), { status: 'seen' }).catch(()=>{});
+        else if (!hasFocus && msg.status === 'sent') updateDoc(doc(db, 'rooms', roomId, 'messages', msg.id), { status: 'delivered' }).catch(()=>{});
       }
     });
   }, [messages, activeChatId, hideReceipts]);
 
-  useEffect(() => {
-    const handleFocus = () => {
-      if (!activeChatId || hideReceipts) return;
-      messages.forEach(msg => { if (msg.sender === 'user' && msg.status !== 'seen') updateDoc(doc(db, 'chats', activeChatId, 'messages', msg.id), { status: 'seen' }).catch(()=>{}); });
-    };
-    window.addEventListener('focus', handleFocus);
-    return () => window.removeEventListener('focus', handleFocus);
-  }, [messages, activeChatId, hideReceipts]);
-
-  // SCROLLING
   const scrollToBottom = (behavior = 'smooth') => {
     if (chatContainerRef.current) {
-      chatContainerRef.current.scrollTo({
-        top: chatContainerRef.current.scrollHeight,
-        behavior: behavior === 'smooth' ? 'smooth' : 'auto'
-      });
+      chatContainerRef.current.scrollTo({ top: chatContainerRef.current.scrollHeight, behavior: behavior === 'smooth' ? 'smooth' : 'auto' });
     }
   };
   const handleScroll = (e) => setShowScrollButton(e.target.scrollHeight - e.target.scrollTop - e.target.clientHeight > 100);
 
-  // --- 5. VIDEO CALLING LOGIC ---
   const initiateCall = async () => {
     if (!activeChatId || !activeChatDoc) return;
     if (!activeChatDoc.userOnline) { alert("User is offline. Call cannot be delivered."); return; }
     const roomId = `vault-${Date.now()}`;
-    await updateDoc(doc(db, 'chats', activeChatId), { activeCall: { caller: 'admin', status: 'ringing', roomId: roomId } });
+    await updateDoc(doc(db, 'rooms', `ADMIN_${activeChatId}`), { activeCall: { caller: 'admin', status: 'ringing', roomId: roomId } });
     setVideoCallState({ roomId, isIncoming: false });
   };
-  const acceptCall = async () => { RING_TONE.pause(); if (videoCallState?.roomId) { await updateDoc(doc(db, 'chats', activeChatId), { 'activeCall.status': 'in-progress' }); setVideoCallState({ ...videoCallState, isIncoming: false }); } };
-  const rejectCall = async () => { RING_TONE.pause(); await updateDoc(doc(db, 'chats', activeChatId), { 'activeCall.status': 'rejected' }); setVideoCallState(null); };
-  const endCallFirebase = async () => { await updateDoc(doc(db, 'chats', activeChatId), { activeCall: null }); setVideoCallState(null); };
+  const acceptCall = async () => { RING_TONE.pause(); if (videoCallState?.roomId) { await updateDoc(doc(db, 'rooms', `ADMIN_${activeChatId}`), { 'activeCall.status': 'in-progress' }); setVideoCallState({ ...videoCallState, isIncoming: false }); } };
+  const rejectCall = async () => { RING_TONE.pause(); await updateDoc(doc(db, 'rooms', `ADMIN_${activeChatId}`), { 'activeCall.status': 'rejected' }); setVideoCallState(null); };
+  const endCallFirebase = async () => { await updateDoc(doc(db, 'rooms', `ADMIN_${activeChatId}`), { activeCall: null }); setVideoCallState(null); };
 
-  // --- 6. ID & REQUEST MANAGEMENT ---
+  // 🛡️ STRICT SAFETY CHECKS ADDED TO DATABASE FUNCTIONS
   const handleApproveRequest = async (request) => {
-    const generatedId = `VIP-${Math.floor(1000 + Math.random() * 9000)}`;
-    const customId = window.prompt(`Assign an Access ID for ${request.name}:`, generatedId);
-    if (!customId) return;
+    if (!request.requestedSecret) return alert("Error: User did not provide a password.");
     try {
-      await setDoc(doc(db, 'access_codes', customId.trim()), { type: 'permanent', status: 'active', createdAt: Date.now(), expiresAt: null, name: request.name });
-      await setDoc(doc(db, 'chats', customId.trim()), { userTyping: false, adminTyping: false, userOnline: false }, { merge: true });
-      await updateDoc(doc(db, 'id_requests', request.id), { status: 'approved', grantedId: customId.trim() });
-    } catch (err) { alert("Failed to approve request."); }
+      const newPhoneNumber = Math.floor(100000 + Math.random() * 900000).toString();
+
+      await setDoc(doc(db, 'auth_keys', request.requestedSecret), { 
+        phoneNumber: newPhoneNumber,
+        status: 'active', 
+        createdAt: Date.now(), 
+        name: request.name || "Unknown",
+        email: request.email || ""
+      });
+
+      await setDoc(doc(db, 'users', newPhoneNumber), {
+        name: request.name || "Unknown",
+        avatar: `https://api.dicebear.com/7.x/initials/svg?seed=${request.name || 'U'}&backgroundColor=8C7462`,
+        userOnline: false
+      });
+
+      await setDoc(doc(db, 'rooms', `ADMIN_${newPhoneNumber}`), { 
+        participants: ["ADMIN", newPhoneNumber],
+        names: { "ADMIN": "Support", [newPhoneNumber]: request.name || "Unknown" },
+        userTyping: false, 
+        adminTyping: false, 
+        userOnline: false 
+      });
+
+      if (request.id) {
+        await updateDoc(doc(db, 'id_requests', request.id), { status: 'approved', grantedPhoneNumber: newPhoneNumber });
+      }
+    } catch (err) { alert("Failed to approve request."); console.error(err); }
   };
 
   const handleEmailDraft = (request) => {
-    const subject = encodeURIComponent("Your Secure Chat Access ID");
-    const body = encodeURIComponent(`Hello ${request.name},\n\nYour request for secure chat access has been approved.\n\nYour Access ID is: ${request.grantedId}\n\nPlease enter this ID on the secure portal at tinyurl.com/haadisabzar to begin our encrypted session.\n\nBest regards,\nSupport Team`);
+    const subject = encodeURIComponent("Your Secure Account is Active");
+    const body = encodeURIComponent(`Hello ${request.name || ''},\n\nYour account has been approved.\n\nYour 6-Digit Phone Number is: ${request.grantedPhoneNumber}\n(Give this number to friends so they can message you).\n\nTo log in, enter the Password you generated during your application.\n\nBest regards,\nSupport Team`);
     window.location.href = `mailto:${request.email}?subject=${subject}&body=${body}`;
   };
 
-  const handleDeleteRequest = async (id) => { if (window.confirm("Permanently delete this request?")) await deleteDoc(doc(db, 'id_requests', id)); };
+  const handleDeleteRequest = async (id) => { 
+    if (!id) return;
+    if (window.confirm("Permanently delete this request?")) await deleteDoc(doc(db, 'id_requests', id)); 
+  };
+  
   const handleCreateCode = async (e) => {
     e.preventDefault();
-    if (!newCodeId.trim()) return;
-    let expiresAt = null; if (parseInt(expiryHours) > 0) expiresAt = Date.now() + (parseInt(expiryHours) * 60 * 60 * 1000);
-    await setDoc(doc(db, 'access_codes', newCodeId.trim()), { type: expiresAt ? "temporary" : "permanent", status: "active", createdAt: Date.now(), expiresAt: expiresAt, name: newCodeName.trim() || "" });
-    await setDoc(doc(db, 'chats', newCodeId.trim()), { userTyping: false, adminTyping: false, userOnline: false }, { merge: true });
-    navigator.clipboard.writeText(newCodeId.trim()); setNewCodeId(""); setNewCodeName("");
-  };
-  const renameCode = async (codeId, currentName) => { const newName = window.prompt("Name:", currentName || ""); if (newName !== null) await updateDoc(doc(db, 'access_codes', codeId), { name: newName.trim() }); };
-  const copyToClipboard = (text) => { navigator.clipboard.writeText(text); alert(`Copied ID!`); };
-  const cleanupExpiredIDs = async () => { const now = Date.now(); for (const code of accessCodes) { if (code.expiresAt && code.expiresAt < now) { await deleteDoc(doc(db, 'access_codes', code.id)); if (activeChatId === code.id) { setActiveChatId(null); setShowMobileChat(false); } } } };
-  const deleteCode = async (id) => { if(window.confirm(`Permanently delete chat ID: ${id}?`)) { await deleteDoc(doc(db, 'access_codes', id)); if (activeChatId === id) { setActiveChatId(null); setShowMobileChat(false); } } };
-  const toggleBlockStatus = async (id, currentStatus) => { const newStatus = currentStatus === "active" ? "blocked" : "active"; await updateDoc(doc(db, 'access_codes', id), { status: newStatus }); if (activeChatId === id && newStatus === "blocked") { setActiveChatId(null); setShowMobileChat(false); } };
+    if (!newCodeId.trim()) return; 
+    
+    const newPhoneNumber = Math.floor(100000 + Math.random() * 900000).toString();
 
-  // --- 7. MESSAGING ENGINE ---
+    await setDoc(doc(db, 'auth_keys', newCodeId.trim()), { status: "active", createdAt: Date.now(), name: newCodeName.trim() || "", phoneNumber: newPhoneNumber });
+    await setDoc(doc(db, 'users', newPhoneNumber), { name: newCodeName.trim() || "User", userOnline: false });
+    await setDoc(doc(db, 'rooms', `ADMIN_${newPhoneNumber}`), { participants: ["ADMIN", newPhoneNumber], userTyping: false, adminTyping: false, userOnline: false });
+    
+    navigator.clipboard.writeText(`Password: ${newCodeId.trim()} | Phone Number: ${newPhoneNumber}`); 
+    setNewCodeId(""); setNewCodeName("");
+    alert("Account created. Details copied to clipboard.");
+  };
+
+  const renameCode = async (secretCode, currentName) => { 
+    if (!secretCode) return;
+    const newName = window.prompt("Name:", currentName || ""); 
+    if (newName !== null) await updateDoc(doc(db, 'auth_keys', secretCode), { name: newName.trim() }); 
+  };
+  
+  const copyToClipboard = (text) => { navigator.clipboard.writeText(text); alert(`Copied!`); };
+  
+  // 🛡️ BUG FIX: Safeguards added against undefined data properties
+  const deleteCode = async (secretCode, phoneNumber) => { 
+    if (!secretCode) return alert("Cannot delete: Missing secret code data.");
+    if(window.confirm(`Permanently delete account?`)) { 
+      try {
+        await deleteDoc(doc(db, 'auth_keys', secretCode)); 
+        if (phoneNumber) {
+          await deleteDoc(doc(db, 'users', phoneNumber));
+        }
+        if (activeChatId === phoneNumber) { setActiveChatId(null); setShowMobileChat(false); } 
+      } catch (err) { console.error("Delete failed", err); }
+    } 
+  };
+
+  const toggleBlockStatus = async (secretCode, currentStatus) => { 
+    if (!secretCode) return;
+    const newStatus = currentStatus === "active" ? "blocked" : "active"; 
+    await updateDoc(doc(db, 'auth_keys', secretCode), { status: newStatus }); 
+  };
+
   const generateAIQuickReplies = async () => {
     if (showAIReplies && aiReplies.length > 0) { setShowAIReplies(false); return; }
     if (!GEMINI_API_KEY || GEMINI_API_KEY.includes('PASTE')) return alert("Missing API Key");
@@ -241,8 +279,10 @@ export default function AdminDashboard() {
     if (!textToSend && !pendingImage) return; 
     if (!activeChatId || isUploading || isOffline) return;
     
+    const roomId = `ADMIN_${activeChatId}`;
+
     if (editingMsgId) {
-      updateDoc(doc(db, 'chats', activeChatId, 'messages', editingMsgId), { text: textToSend, isEdited: true }).catch(()=>{});
+      updateDoc(doc(db, 'rooms', roomId, 'messages', editingMsgId), { text: textToSend, isEdited: true }).catch(()=>{});
       setEditingMsgId(null); setNewMessage("");
       if (textareaRef.current) textareaRef.current.style.height = '48px';
       return;
@@ -253,7 +293,7 @@ export default function AdminDashboard() {
     if (textareaRef.current) textareaRef.current.style.height = '48px';
     scrollToBottom('auto');
 
-    if(!ghostMode) setDoc(doc(db, 'chats', activeChatId), { adminTyping: false }, { merge: true }).catch(() => {});
+    if(!ghostMode) setDoc(doc(db, 'rooms', roomId), { adminTyping: false }, { merge: true }).catch(() => {});
 
     try {
       if (currentImg) {
@@ -278,26 +318,25 @@ export default function AdminDashboard() {
         const res = await fetch(`https://api.imgbb.com/1/upload?key=${IMGBB_API_KEY}`, { method: 'POST', body: formData });
         const json = await res.json();
         if (!json.success) throw new Error("Upload Failed");
-        await addDoc(collection(db, 'chats', activeChatId, 'messages'), { text: json.data.url, isImage: true, sender: "admin", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
+        await addDoc(collection(db, 'rooms', roomId, 'messages'), { text: json.data.url, isImage: true, sender: "admin", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
       }
 
       if (currentText) {
-        await addDoc(collection(db, 'chats', activeChatId, 'messages'), { text: currentText, isImage: false, sender: "admin", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
+        await addDoc(collection(db, 'rooms', roomId, 'messages'), { text: currentText, isImage: false, sender: "admin", timestamp: serverTimestamp(), status: "sent", replyToId: currentReply });
       }
       scrollToBottom('auto');
     } catch (err) { alert("Delivery Failed."); } finally { setIsUploading(false); }
   };
 
-  // ✅ ERROR RECTIFIED: This correctly handles typing states without needing onFocus/onBlur
   const handleTyping = (e) => { 
     setNewMessage(e.target.value); 
     if (activeChatId && !ghostMode) {
-      setDoc(doc(db, 'chats', activeChatId), { adminTyping: e.target.value.length > 0 }, { merge: true }).catch(()=>{}); 
+      setDoc(doc(db, 'rooms', `ADMIN_${activeChatId}`), { adminTyping: e.target.value.length > 0 }, { merge: true }).catch(()=>{}); 
     }
   };
 
-  const deleteMessage = (msgId) => { if (window.confirm("Delete this message?")) deleteDoc(doc(db, 'chats', activeChatId, 'messages', msgId)).catch(()=>{}); };
-  const clearEntireChatHistory = () => { if (window.confirm("NUKE PROTOCOL: Permanently delete ALL messages?")) { messages.forEach(msg => deleteDoc(doc(db, 'chats', activeChatId, 'messages', msg.id)).catch(()=>{})); } };
+  const deleteMessage = (msgId) => { if (window.confirm("Delete this message?")) deleteDoc(doc(db, 'rooms', `ADMIN_${activeChatId}`, 'messages', msgId)).catch(()=>{}); };
+  const clearEntireChatHistory = () => { if (window.confirm("NUKE PROTOCOL: Permanently delete ALL messages?")) { messages.forEach(msg => deleteDoc(doc(db, 'rooms', `ADMIN_${activeChatId}`, 'messages', msg.id)).catch(()=>{})); } };
   
   const exportChatHistory = () => {
     if (!messages.length) return alert("No messages to export.");
@@ -327,7 +366,8 @@ export default function AdminDashboard() {
     return <Check size={14} className="text-[#E8E1D5] ml-1" />; 
   };
 
-  const getDisplayName = (code) => code.name ? code.name : code.id;
+  // Gracefully handles data missing a name or phone number
+  const getDisplayName = (acc) => acc?.name ? acc.name : (acc?.phoneNumber || "Legacy Account");
   const pendingRequestsCount = accessRequests.filter(r => r.status === 'pending').length;
 
   if (authLoading) return <div className="flex h-[100dvh] items-center justify-center bg-[#E6DCC8] text-[#4A3C31] font-bold">Loading Vault...</div>;
@@ -342,7 +382,6 @@ export default function AdminDashboard() {
         <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-md p-10 flex flex-col items-center rounded-3xl z-10 bg-[#F9F6F0]/80 backdrop-blur-xl border border-[#C1B2A6]/50 shadow-[0_20px_50px_rgba(90,70,50,0.15)]">
           <ShieldHalf size={56} className="text-[#8C7462] mb-6" />
           <h1 className="text-2xl font-serif font-bold mb-2 tracking-tight">Admin Vault</h1>
-          <p className="text-[#7A6B5D] mb-8 text-sm text-center font-medium">Secure administrator authorization.</p>
           <button onClick={() => signInWithPopup(auth, googleProvider)} className="w-full bg-[#5A4535] hover:bg-[#423226] text-[#F9F6F0] font-bold py-3.5 rounded-xl shadow-md transition-colors">Authenticate</button>
         </motion.div>
       </div>
@@ -350,16 +389,13 @@ export default function AdminDashboard() {
   }
 
   return (
-    // 🔥 PURE FLEXBOX FIX
     <div className="flex flex-col sm:flex-row w-full h-[100dvh] bg-[#F9F6F0] font-sans text-[#4A3C31] overflow-hidden relative">
       
-      {/* 🎨 Ambient Background */}
       <div className="absolute inset-0 pointer-events-none z-0 opacity-40">
         <div className="absolute top-[-10%] left-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#C1B2A6] mix-blend-multiply blur-[100px]" />
         <div className="absolute bottom-[-10%] right-[-10%] w-[50vw] h-[50vw] rounded-full bg-[#E8E1D5] mix-blend-multiply blur-[100px]" />
       </div>
 
-      {/* 🖼️ Image Lightbox */}
       <AnimatePresence>
         {selectedImage && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="fixed inset-0 z-[100] bg-[#3A2D23]/95 backdrop-blur-sm flex items-center justify-center p-4 cursor-zoom-out" onClick={() => setSelectedImage(null)}>
@@ -369,7 +405,6 @@ export default function AdminDashboard() {
         )}
       </AnimatePresence>
 
-      {/* 📞 Incoming Call Overlay */}
       <AnimatePresence>
         {videoCallState?.isIncoming && (
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="fixed inset-0 z-[600] bg-black/80 backdrop-blur-2xl flex flex-col items-center justify-center text-white">
@@ -377,7 +412,6 @@ export default function AdminDashboard() {
               <PhoneIncoming size={48} className="text-emerald-400" />
             </div>
             <h2 className="text-3xl font-bold mb-2 tracking-tight">Incoming Secure Call</h2>
-            <p className="text-white/60 font-medium mb-12">Client is attempting to connect.</p>
             <div className="flex gap-6">
               <button onClick={rejectCall} className="w-16 h-16 rounded-full bg-red-500 hover:bg-red-600 flex items-center justify-center shadow-[0_0_30px_rgba(239,68,68,0.5)] transition-transform hover:scale-110"><PhoneOff size={28} /></button>
               <button onClick={acceptCall} className="w-16 h-16 rounded-full bg-emerald-500 hover:bg-emerald-600 flex items-center justify-center shadow-[0_0_30px_rgba(16,185,129,0.5)] transition-transform hover:scale-110"><Video size={28} /></button>
@@ -386,7 +420,6 @@ export default function AdminDashboard() {
         )}
       </AnimatePresence>
 
-      {/* 🎥 Active Native Video Call */}
       <AnimatePresence>
         {videoCallState && !videoCallState.isIncoming && (
           <NativeVideoCall 
@@ -399,14 +432,13 @@ export default function AdminDashboard() {
         )}
       </AnimatePresence>
 
-      {/* 🗺️ Sidebar Navigation */}
       <nav className="flex-none shrink-0 order-last sm:order-first w-full h-[64px] sm:w-[88px] sm:h-full bg-[#F9F6F0]/70 backdrop-blur-xl border-t sm:border-t-0 sm:border-r border-[#C1B2A6]/50 flex sm:flex-col items-center justify-around sm:justify-start sm:py-6 z-40 shadow-[0_0_30px_rgba(90,70,50,0.05)] pb-[env(safe-area-inset-bottom)]">
         <div className="hidden sm:flex w-12 h-12 bg-gradient-to-br from-[#8C7462] to-[#5A4535] rounded-xl shadow-md items-center justify-center mb-6 text-[#F9F6F0]">
           <Activity size={24} />
         </div>
         <div className="flex sm:flex-col gap-1 sm:gap-3 w-full px-2 sm:px-4 justify-around sm:justify-start">
           <NavButton icon={<MessageSquare size={22}/>} label="Chats" active={activeTab === 'chats'} onClick={() => {setActiveTab('chats'); setShowMobileChat(false);}} />
-          <NavButton icon={<KeyRound size={22}/>} label="IDs" active={activeTab === 'ids'} onClick={() => {setActiveTab('ids'); setShowMobileChat(false);}} />
+          <NavButton icon={<KeyRound size={22}/>} label="Accounts" active={activeTab === 'ids'} onClick={() => {setActiveTab('ids'); setShowMobileChat(false);}} />
           <button onClick={() => {setActiveTab('requests'); setShowMobileChat(false);}} className={`p-2.5 sm:p-3.5 flex sm:flex-col flex-row sm:w-full items-center justify-center gap-2 sm:gap-1.5 rounded-xl transition-all duration-200 relative group ${activeTab === 'requests' ? 'text-[#5A4535] bg-[#E8E1D5] shadow-sm border border-[#C1B2A6]/50' : 'text-[#7A6B5D] hover:text-[#5A4535] hover:bg-[#F9F6F0]/50 border border-transparent'}`}>
             <div className="relative">
               <Bell size={22} />
@@ -417,48 +449,38 @@ export default function AdminDashboard() {
           <NavButton icon={<Settings size={22}/>} label="Settings" active={activeTab === 'settings'} onClick={() => {setActiveTab('settings'); setShowMobileChat(false);}} />
           <div className="flex sm:hidden"><button onClick={handleAdminLogout} className="p-3 rounded-xl text-red-500 hover:bg-red-50 transition-colors"><LogOut size={22} /></button></div>
         </div>
-        <div className="hidden sm:flex mt-auto px-4 w-full flex-col gap-2">
-          <button onClick={handleAdminLogout} className="w-full py-3 flex flex-col items-center gap-1 text-[#7A6B5D] hover:text-red-600 hover:bg-[#E8E1D5]/50 rounded-xl transition-colors">
-            <LogOut size={20} /> <span className="text-[10px] font-bold">EXIT</span>
-          </button>
-        </div>
       </nav>
 
-      {/* 🚀 MAIN CONTENT WRAPPER */}
       <AnimatePresence mode="wait">
         
         {/* --- TAB: CHATS --- */}
         {activeTab === 'chats' && (
           <motion.div key="chats" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="flex-1 flex w-full min-h-0 z-10">
             
-            {/* SIDEBAR */}
             <div className={`w-full sm:w-[320px] flex-none flex flex-col h-full bg-[#F9F6F0]/50 backdrop-blur-md border-r border-[#C1B2A6]/50 ${showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
               <div className="flex-none p-5 border-b border-[#C1B2A6]/50 flex justify-between items-center" style={{ paddingTop: 'max(1.25rem, env(safe-area-inset-top))' }}>
                 <h2 className="font-serif font-bold text-xl text-[#3A2D23]">Sessions</h2>
-                <div className="px-2.5 py-1 bg-[#E8E1D5] text-[#5A4535] rounded-full text-xs font-bold border border-[#C1B2A6]/30">{accessCodes.filter(c=>c.status==='active').length}</div>
+                <div className="px-2.5 py-1 bg-[#E8E1D5] text-[#5A4535] rounded-full text-xs font-bold border border-[#C1B2A6]/30">{accounts.filter(c=>c.status==='active').length}</div>
               </div>
               <div className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2 custom-scrollbar">
-                {accessCodes.filter(c => c.status === 'active').map(code => {
-                  const isActive = activeChatId === code.id;
+                {accounts.filter(c => c.status === 'active' && c.phoneNumber).map(acc => {
+                  const isActive = activeChatId === acc.phoneNumber;
                   return (
-                    <div key={code.id} onClick={() => {setActiveChatId(code.id); setShowMobileChat(true);}} className={`p-3.5 rounded-xl border cursor-pointer transition-colors flex justify-between items-center group ${isActive ? 'bg-[#5A4535] border-[#4A3C31] shadow-md text-[#F9F6F0]' : 'bg-[#F9F6F0]/80 border-[#C1B2A6]/50 hover:border-[#8C7462] shadow-sm text-[#4A3C31]'}`}>
+                    <div key={acc.secretCode} onClick={() => {setActiveChatId(acc.phoneNumber); setShowMobileChat(true);}} className={`p-3.5 rounded-xl border cursor-pointer transition-colors flex justify-between items-center group ${isActive ? 'bg-[#5A4535] border-[#4A3C31] shadow-md text-[#F9F6F0]' : 'bg-[#F9F6F0]/80 border-[#C1B2A6]/50 hover:border-[#8C7462] shadow-sm text-[#4A3C31]'}`}>
                       <div className="flex flex-col overflow-hidden">
-                        <span className={`font-bold truncate text-[15px] ${isActive ? 'text-[#F9F6F0]' : 'text-[#3A2D23]'}`}>{getDisplayName(code)}</span>
-                        {code.name && <span className={`text-[10px] uppercase tracking-widest mt-0.5 ${isActive ? 'text-[#C1B2A6]' : 'text-[#7A6B5D]'}`}>{code.id}</span>}
+                        <span className={`font-bold truncate text-[15px] ${isActive ? 'text-[#F9F6F0]' : 'text-[#3A2D23]'}`}>{getDisplayName(acc)}</span>
+                        <span className={`text-[10px] uppercase tracking-widest mt-0.5 ${isActive ? 'text-[#C1B2A6]' : 'text-[#7A6B5D]'}`}>ID: {acc.phoneNumber}</span>
                       </div>
                       <ChevronLeft size={18} className={`rotate-180 opacity-50 sm:hidden ${isActive ? 'text-white' : ''}`} />
                     </div>
                   )
                 })}
-                {accessCodes.filter(c => c.status === 'active').length === 0 && <p className="text-sm text-center mt-10 text-[#7A6B5D]">No active sessions.</p>}
               </div>
             </div>
 
-            {/* CHAT AREA */}
             <div className={`flex-1 flex flex-col h-full relative ${!showMobileChat ? 'hidden sm:flex' : 'flex'}`}>
               {activeChatId ? (
                 <>
-                  {/* Header */}
                   <header className="flex-none min-h-[72px] bg-[#F9F6F0]/80 backdrop-blur-xl border-b border-[#C1B2A6]/50 px-4 sm:px-6 py-3 flex items-center justify-between z-20 shadow-[0_10px_30px_rgba(90,70,50,0.03)]" style={{ paddingTop: 'max(0.75rem, env(safe-area-inset-top))' }}>
                     <div className="flex items-center gap-3 min-w-0">
                       <button onClick={() => setShowMobileChat(false)} className="sm:hidden flex-none p-2 -ml-2 rounded-xl text-[#8C7462] hover:bg-[#E8E1D5]"><ChevronLeft size={24} /></button>
@@ -467,19 +489,17 @@ export default function AdminDashboard() {
                         {activeChatDoc?.userOnline && <span className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-500 border-2 border-[#F9F6F0] rounded-full shadow-sm"></span>}
                       </div>
                       <div className="flex flex-col min-w-0">
-                        <h3 className="font-bold text-[16px] tracking-tight text-[#3A2D23] truncate">{getDisplayName(accessCodes.find(c=>c.id===activeChatId) || {id: activeChatId})}</h3>
+                        <h3 className="font-bold text-[16px] tracking-tight text-[#3A2D23] truncate">{getDisplayName(accounts.find(a=>a.phoneNumber===activeChatId) || {phoneNumber: activeChatId})}</h3>
                         <p className={`text-[11px] font-medium truncate ${activeChatDoc?.userOnline ? 'text-emerald-600' : 'text-[#7A6B5D]'}`}>{activeChatDoc?.userOnline ? "Online now" : `Seen ${formatLastSeen(activeChatDoc?.userLastSeen)}`}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-none pl-2">
                       {ghostMode && <div className="hidden sm:flex items-center gap-1.5 bg-[#E8E1D5] border border-[#C1B2A6] px-2.5 py-1 rounded-md text-[#5A4535]"><Ghost size={12} /> <span className="text-[10px] font-bold uppercase tracking-widest">Ghost</span></div>}
                       <button onClick={initiateCall} title="Start Secure Video Call" className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:text-blue-600 shadow-sm transition-colors"><Video size={18} /></button>
-                      <button onClick={exportChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-[#5A4535] shadow-sm transition-colors"><Download size={18} /></button>
                       <button onClick={clearEntireChatHistory} className="p-2 sm:p-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#7A6B5D] hover:text-red-600 shadow-sm transition-colors"><Eraser size={18} /></button>
                     </div>
                   </header>
                   
-                  {/* Chat History */}
                   <main ref={chatContainerRef} onScroll={handleScroll} className="flex-1 min-h-0 w-full overflow-y-auto p-4 sm:p-6 custom-scrollbar relative z-10">
                     <div className="w-full max-w-4xl mx-auto flex flex-col gap-4 pb-2">
                       <AnimatePresence mode="popLayout">
@@ -487,13 +507,11 @@ export default function AdminDashboard() {
                           const isAdmin = msg.sender === 'admin';
                           return (
                             <motion.div key={msg.id} layout="position" variants={fadeUp} initial="hidden" animate="visible" className={`flex flex-col ${isAdmin ? 'items-end' : 'items-start'} group relative`}>
-                              
                               {msg.replyToId && messages.find(m => m.id === msg.replyToId) && (
                                 <div className={`mb-1 px-3 py-1.5 rounded-lg text-xs font-medium border opacity-80 max-w-[70%] truncate ${isAdmin ? 'bg-[#E8E1D5] border-[#C1B2A6]/50 text-[#4A3C31]' : 'bg-[#C1B2A6]/30 border-[#C1B2A6]/50 text-[#4A3C31]'}`}>
                                   <Reply size={10} className="inline mr-1"/> {messages.find(m => m.id === msg.replyToId).text}
                                 </div>
                               )}
-
                               <div className={`relative px-4 py-3 sm:px-5 sm:py-3.5 max-w-[85%] sm:max-w-[70%] rounded-2xl shadow-sm border break-words overflow-hidden ${isAdmin ? 'bg-[#5A4535] border-[#423226] text-[#F9F6F0] rounded-tr-sm' : 'bg-[#F9F6F0] border-[#C1B2A6]/50 text-[#4A3C31] rounded-tl-sm'}`}>
                                 {msg.isVideoCall ? (
                                   <div className="flex flex-col items-center justify-center p-3 bg-[#F9F6F0]/10 rounded-xl border border-[#C1B2A6]/30 mb-1">
@@ -518,7 +536,6 @@ export default function AdminDashboard() {
                                   {isAdmin && hideReceipts && <Check size={14} className="text-[#C1B2A6] ml-1" />}
                                 </div>
                               </div>
-                              
                               <div className={`hidden sm:flex absolute top-1/2 -translate-y-1/2 ${isAdmin ? '-left-[104px]' : '-right-[72px]'} opacity-0 group-hover:opacity-100 transition-opacity gap-1.5`}>
                                 <button onClick={() => setReplyingToId(msg.id)} className="p-2 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 shadow-sm hover:text-[#5A4535] text-[#7A6B5D] transition-colors"><Reply size={14}/></button>
                                 {isAdmin && !msg.isImage && !msg.isVideoCall && <button onClick={() => {setEditingMsgId(msg.id); setNewMessage(msg.text);}} className="p-2 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 shadow-sm hover:text-[#5A4535] text-[#7A6B5D] transition-colors"><Edit2 size={14}/></button>}
@@ -548,10 +565,8 @@ export default function AdminDashboard() {
                     )}
                   </AnimatePresence>
 
-                  {/* Footer */}
                   <footer className="flex-none shrink-0 bg-[#F9F6F0]/80 backdrop-blur-xl border-t border-[#C1B2A6]/50 px-3 sm:px-6 py-3 z-20 shadow-[0_-10px_30px_rgba(90,70,50,0.03)]" style={{ paddingBottom: 'max(0.75rem, env(safe-area-inset-bottom))' }}>
                     <div className="w-full max-w-4xl mx-auto flex flex-col gap-2 relative">
-                      
                       <AnimatePresence>
                         {connectionError && (
                           <motion.div initial={{ opacity: 0, y: 10, height: 0 }} animate={{ opacity: 1, y: 0, height: 'auto' }} exit={{ opacity: 0, y: 10, height: 0 }} className="flex items-center gap-2 bg-red-50 text-red-600 border border-red-200 px-4 py-2 rounded-xl text-xs font-bold shadow-sm mb-1">
@@ -632,123 +647,56 @@ export default function AdminDashboard() {
           </motion.div>
         )}
 
-        {/* --- REQUESTS --- */}
-        {activeTab === 'requests' && (
-          <motion.div key="requests" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="flex-1 flex flex-col w-full h-full min-h-0 overflow-hidden p-4 sm:p-8" style={{ paddingTop: 'max(1.5rem, env(safe-area-inset-top))' }}>
-            <div className="flex-none shrink-0 mb-6 border-b border-[#C1B2A6]/50 pb-4">
-              <h2 className="text-3xl font-serif font-bold tracking-tight text-[#3A2D23]">Access Requests</h2>
-              <p className="text-sm text-[#7A6B5D] mt-1 font-medium">Review pending secure portal applications.</p>
-            </div>
-            <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1 pb-4">
-              {accessRequests.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-48 text-[#8C7462] opacity-60">
-                  <UserPlus size={48} className="mb-4" strokeWidth={1.5}/>
-                  <p className="font-bold">No pending requests.</p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
-                  <AnimatePresence>
-                    {accessRequests.map(req => (
-                      <motion.div key={req.id} layout exit={{ opacity: 0, scale: 0.9 }} transition={animTween} className="p-5 rounded-2xl bg-[#F9F6F0]/80 backdrop-blur-md border border-[#C1B2A6]/50 shadow-[0_10px_20px_rgba(90,70,50,0.05)] flex flex-col justify-between">
-                        <div className="mb-5">
-                          <div className="flex justify-between items-start mb-3">
-                            <h3 className="font-bold text-lg text-[#3A2D23] truncate pr-2">{req.name}</h3>
-                            <span className={`text-[9px] uppercase tracking-widest px-2 py-1 rounded-full font-bold border ${req.status === 'pending' ? 'bg-[#E8E1D5] text-[#8C7462] border-[#C1B2A6]' : 'bg-emerald-50 text-emerald-600 border-emerald-200'}`}>{req.status}</span>
-                          </div>
-                          <div className="space-y-2">
-                            <a href={`mailto:${req.email}`} className="flex items-center gap-2 text-sm text-[#5A4535] hover:text-[#8C7462] transition-colors w-max font-medium"><Mail size={14}/> {req.email}</a>
-                            <a href={`https://www.google.com/maps?q=${req.location.lat},${req.location.lng}`} target="_blank" rel="noreferrer" className="flex items-center gap-2 text-sm text-blue-600 hover:text-blue-800 transition-colors w-max font-medium"><MapPin size={14}/> View Location Coordinates</a>
-                          </div>
-                        </div>
-                        <div className="flex flex-col gap-2 mt-auto">
-                          {req.status === 'pending' ? (
-                            <div className="flex gap-2">
-                              <button onClick={() => handleApproveRequest(req)} className="flex-1 py-2.5 rounded-xl bg-[#5A4535] hover:bg-[#423226] text-[#F9F6F0] font-bold text-xs shadow-md transition-colors">APPROVE</button>
-                              <button onClick={() => handleDeleteRequest(req.id)} className="px-4 py-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-red-600 hover:bg-red-50 font-bold text-xs shadow-sm transition-colors">DELETE</button>
-                            </div>
-                          ) : (
-                            <div className="flex flex-col gap-2">
-                              <div className="p-2.5 bg-[#E8E1D5]/50 border border-[#C1B2A6]/50 rounded-xl flex justify-between items-center">
-                                <span className="text-xs font-bold text-[#7A6B5D] uppercase tracking-widest">Granted ID:</span>
-                                <span className="font-mono font-bold text-[#5A4535]">{req.grantedId}</span>
-                              </div>
-                              <div className="flex gap-2">
-                                <button onClick={() => handleEmailDraft(req)} className="flex-1 py-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 hover:border-[#8C7462] text-[#5A4535] font-bold text-xs shadow-sm transition-colors flex items-center justify-center gap-1.5"><Send size={14}/> Email Link</button>
-                                <button onClick={() => handleDeleteRequest(req.id)} className="px-3 py-2.5 rounded-xl bg-[#F9F6F0] border border-[#C1B2A6]/50 text-red-500 hover:bg-red-50 shadow-sm transition-colors"><Trash2 size={16}/></button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                </div>
-              )}
-            </div>
-          </motion.div>
-        )}
-
-        {/* --- IDs --- */}
+        {/* --- ACCOUNTS --- */}
         {activeTab === 'ids' && (
           <motion.div key="ids" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={animTween} className="flex-1 flex flex-col w-full h-full min-h-0 overflow-hidden p-4 sm:p-8" style={{ paddingTop: 'max(1.5rem, env(safe-area-inset-top))' }}>
             <div className="flex-none shrink-0 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 mb-6 border-b border-[#C1B2A6]/50 pb-4">
               <div>
-                <h2 className="text-3xl font-serif font-bold tracking-tight text-[#3A2D23]">Access Vectors</h2>
-                <p className="text-sm text-[#7A6B5D] font-medium mt-1">Manage secure invitations.</p>
+                <h2 className="text-3xl font-serif font-bold tracking-tight text-[#3A2D23]">User Accounts</h2>
+                <p className="text-sm text-[#7A6B5D] font-medium mt-1">Manage active network participants.</p>
               </div>
-              <button onClick={cleanupExpiredIDs} className="flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-sm bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:bg-[#E8E1D5] shadow-sm transition-colors">
-                <Clock size={16}/> Clean Expired
-              </button>
             </div>
             <div className="flex-none shrink-0 p-6 rounded-3xl mb-6 bg-[#F9F6F0]/80 backdrop-blur-md border border-[#C1B2A6]/50 shadow-[0_10px_20px_rgba(90,70,50,0.05)]">
               <form onSubmit={handleCreateCode} className="flex flex-col md:flex-row gap-4 md:items-end">
                 <div className="flex-1">
-                  <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 block text-[#7A6B5D]">Custom ID</label>
-                  <input type="text" value={newCodeId} onChange={(e) => setNewCodeId(e.target.value)} placeholder="VIP-01" className="w-full rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#8C7462]/50 transition-all font-mono uppercase font-bold border border-[#C1B2A6]/50 text-sm bg-[#F9F6F0] text-[#3A2D23] shadow-inner"/>
+                  <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 block text-[#7A6B5D]">Manual Password</label>
+                  <input type="text" value={newCodeId} onChange={(e) => setNewCodeId(e.target.value)} placeholder="E.g. pAssW0rd" className="w-full rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#8C7462]/50 transition-all font-mono font-bold border border-[#C1B2A6]/50 text-sm bg-[#F9F6F0] text-[#3A2D23] shadow-inner"/>
                 </div>
                 <div className="flex-1">
                   <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 block text-[#7A6B5D]">Client Name</label>
                   <input type="text" value={newCodeName} onChange={(e) => setNewCodeName(e.target.value)} placeholder="John Doe" className="w-full rounded-xl px-4 py-3.5 focus:outline-none focus:ring-2 focus:ring-[#8C7462]/50 transition-all font-bold border border-[#C1B2A6]/50 text-sm bg-[#F9F6F0] text-[#3A2D23] shadow-inner"/>
                 </div>
-                <div className="w-full md:w-48">
-                  <label className="text-[11px] font-bold uppercase tracking-widest mb-1.5 block text-[#7A6B5D]">Window</label>
-                  <select value={expiryHours} onChange={(e) => setExpiryHours(e.target.value)} className="w-full rounded-xl px-4 py-3.5 outline-none font-bold border border-[#C1B2A6]/50 text-sm bg-[#F9F6F0] text-[#3A2D23] shadow-inner">
-                    <option value="0">∞ Permanent</option>
-                    <option value="1">⏱ 1 Hour</option>
-                    <option value="24">⏱ 24 Hours</option>
-                  </select>
-                </div>
-                <motion.button whileTap={{ scale: 0.95 }} type="submit" disabled={!newCodeId.trim()} className="bg-[#5A4535] hover:bg-[#423226] disabled:opacity-50 text-[#F9F6F0] px-6 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md">
-                  <Plus size={18}/> Generate
+                <motion.button whileTap={{ scale: 0.95 }} type="submit" disabled={!newCodeId.trim()} className="bg-[#5A4535] hover:bg-[#423226] disabled:opacity-50 text-[#F9F6F0] px-8 py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 shadow-md">
+                  <Plus size={18}/> Generate Account
                 </motion.button>
               </form>
             </div>
             <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar pr-1 pb-4">
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5">
                 <AnimatePresence>
-                  {accessCodes.map(code => {
-                    const isExpired = code.expiresAt && code.expiresAt < Date.now();
-                    const displayName = getDisplayName(code);
+                  {accounts.map(acc => {
+                    const displayName = getDisplayName(acc);
                     return (
-                      <motion.div key={code.id} layout exit={{ opacity: 0, scale: 0.9 }} transition={animTween} className={`p-5 rounded-2xl border flex flex-col justify-between h-40 transition-colors ${isExpired ? 'bg-[#E8E1D5]/50 border-[#C1B2A6]/30 opacity-60 grayscale' : 'bg-[#F9F6F0]/80 backdrop-blur-sm border-[#C1B2A6]/50 hover:border-[#8C7462] shadow-sm'}`}>
+                      <motion.div key={acc.secretCode} layout exit={{ opacity: 0, scale: 0.9 }} transition={animTween} className={`p-5 rounded-2xl border flex flex-col justify-between h-40 transition-colors bg-[#F9F6F0]/80 backdrop-blur-sm border-[#C1B2A6]/50 hover:border-[#8C7462] shadow-sm`}>
                         <div className="flex justify-between items-start">
-                          <div className="flex flex-col max-w-[70%]">
+                          <div className="flex flex-col max-w-[60%]">
                             <div className="flex items-center gap-2">
                               <span className="font-bold text-lg text-[#3A2D23] truncate">{displayName}</span>
-                              {!isExpired && <button onClick={() => renameCode(code.id, code.name)} className="text-[#9E8E81] hover:text-[#5A4535] transition-colors"><Edit3 size={14}/></button>}
+                              <button onClick={() => renameCode(acc.secretCode, acc.name)} className="text-[#9E8E81] hover:text-[#5A4535] transition-colors"><Edit3 size={14}/></button>
                             </div>
-                            {code.name && <span className="text-[10px] font-mono uppercase text-[#7A6B5D] mt-0.5 truncate">{code.id}</span>}
+                            <span className="text-[10px] font-mono uppercase text-[#7A6B5D] mt-0.5 truncate">Phone: {acc.phoneNumber}</span>
+                            <span className="text-[10px] font-mono text-red-500 mt-0.5 truncate">Pass: {acc.secretCode}</span>
                           </div>
                           <div className="flex flex-col items-end gap-2">
-                            <span className={`text-[9px] uppercase tracking-widest px-2 py-1 rounded-full font-bold border ${code.type === 'permanent' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-[#E8E1D5] text-[#8C7462] border-[#C1B2A6]'}`}>{isExpired ? 'EXPIRED' : code.type}</span>
-                            {!isExpired && <button onClick={() => copyToClipboard(code.id)} className="p-1.5 rounded-md bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:bg-[#E8E1D5] shadow-sm"><Copy size={12}/></button>}
+                            <span className={`text-[9px] uppercase tracking-widest px-2 py-1 rounded-full font-bold border ${acc.status === 'active' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-red-50 text-red-700 border-red-200'}`}>{acc.status.toUpperCase()}</span>
+                            <button onClick={() => copyToClipboard(`Phone: ${acc.phoneNumber} | Pass: ${acc.secretCode}`)} className="p-1.5 rounded-md bg-[#F9F6F0] border border-[#C1B2A6]/50 text-[#5A4535] hover:bg-[#E8E1D5] shadow-sm"><Copy size={12}/></button>
                           </div>
                         </div>
                         <div className="flex gap-2 mt-auto">
-                          <button onClick={() => toggleBlockStatus(code.id, code.status)} className={`flex-1 py-2.5 rounded-xl flex justify-center items-center text-[11px] font-bold transition-colors border shadow-sm ${code.status === 'active' ? 'text-[#8C7462] bg-[#F9F6F0] border-[#C1B2A6]/50 hover:bg-[#E8E1D5]' : 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'}`}>
-                            {code.status === 'active' ? 'BLOCK' : 'UNBLOCK'}
+                          <button onClick={() => toggleBlockStatus(acc.secretCode, acc.status)} className={`flex-1 py-2.5 rounded-xl flex justify-center items-center text-[11px] font-bold transition-colors border shadow-sm ${acc.status === 'active' ? 'text-[#8C7462] bg-[#F9F6F0] border-[#C1B2A6]/50 hover:bg-[#E8E1D5]' : 'text-emerald-700 bg-emerald-50 border-emerald-200 hover:bg-emerald-100'}`}>
+                            {acc.status === 'active' ? 'BLOCK' : 'UNBLOCK'}
                           </button>
-                          <button onClick={() => deleteCode(code.id)} className="flex-1 py-2.5 rounded-xl flex justify-center items-center text-[11px] font-bold bg-[#F9F6F0] border border-red-200 text-red-600 hover:bg-red-50 shadow-sm transition-colors">DELETE</button>
+                          <button onClick={() => deleteCode(acc.secretCode, acc.phoneNumber)} className="flex-1 py-2.5 rounded-xl flex justify-center items-center text-[11px] font-bold bg-[#F9F6F0] border border-red-200 text-red-600 hover:bg-red-50 shadow-sm transition-colors">DELETE</button>
                         </div>
                       </motion.div>
                     );
@@ -777,18 +725,6 @@ export default function AdminDashboard() {
                 </div>
                 <button onClick={() => setGhostMode(!ghostMode)} className={`relative w-14 h-7 rounded-full transition-colors duration-300 shadow-inner flex-shrink-0 border border-[#C1B2A6]/50 ${ghostMode ? 'bg-[#5A4535]' : 'bg-[#E8E1D5]'}`}>
                   <motion.div animate={{ x: ghostMode ? 28 : 2 }} transition={{ type: "spring", stiffness: 500, damping: 30 }} className="absolute top-[1px] left-0 w-6 h-6 bg-[#F9F6F0] rounded-full shadow-sm" />
-                </button>
-              </div>
-              <div className="border border-[#C1B2A6]/50 p-6 rounded-2xl flex items-center justify-between shadow-sm bg-[#F9F6F0]/80 backdrop-blur-md">
-                <div className="flex gap-4 items-center">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center border transition-colors ${hideReceipts ? 'bg-[#E8E1D5] text-[#5A4535] border-[#C1B2A6]' : 'bg-[#F9F6F0] text-[#9E8E81] border-[#C1B2A6]/50'}`}><EyeOff size={24} /></div>
-                  <div>
-                    <h3 className="text-[16px] font-bold text-[#3A2D23]">Stealth Receipts</h3>
-                    <p className="text-[12px] mt-0.5 text-[#7A6B5D] font-medium max-w-[200px] sm:max-w-none">Do not send Read or Delivered ticks to users.</p>
-                  </div>
-                </div>
-                <button onClick={() => setHideReceipts(!hideReceipts)} className={`relative w-14 h-7 rounded-full transition-colors duration-300 shadow-inner flex-shrink-0 border border-[#C1B2A6]/50 ${hideReceipts ? 'bg-[#5A4535]' : 'bg-[#E8E1D5]'}`}>
-                  <motion.div animate={{ x: hideReceipts ? 28 : 2 }} transition={{ type: "spring", stiffness: 500, damping: 30 }} className="absolute top-[1px] left-0 w-6 h-6 bg-[#F9F6F0] rounded-full shadow-sm" />
                 </button>
               </div>
             </div>

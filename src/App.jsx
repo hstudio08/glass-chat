@@ -1,15 +1,12 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
-import UserChat from './pages/UserChat'; 
-import AdminDashboard from './pages/AdminDashboard';
+import React from 'react';
+import { AppProvider } from './contexts/AppContext';
+import AppLayout from './layouts/AppLayout';
 
 function App() {
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/" element={<UserChat />} />
-        <Route path="/admin-hq" element={<AdminDashboard />} />
-      </Routes>
-    </BrowserRouter>
+    <AppProvider>
+      <AppLayout />
+    </AppProvider>
   );
 }
 
