@@ -12,7 +12,7 @@ import LeftSidebar from '../components/Sidebar/LeftSidebar';
 import ChatArea from '../components/ChatArea/ChatArea';
 import AdminDashboard from '../components/Admin/AdminDashboard';
 import SettingsView from '../components/Settings/SettingsView'; 
-import VideoCallUI from '../components/Call/VideoCallUI';
+import VideoCallUI from '../components/Call/VideoCallUi';
 
 export default function AppLayout() {
   const { currentUser, userProfile, myPhoneNumber, setMyPhoneNumber, activeRoom, setActiveRoom } = useApp();
